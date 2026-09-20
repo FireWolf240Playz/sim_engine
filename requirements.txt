@@ -1,0 +1,12 @@
+# Eleven - runtime dependencies
+simpy>=4.1,<5
+numpy>=2.0
+pandas>=2.0
+matplotlib>=3.8
+pydantic>=2.0,<3
+pyyaml>=6.0
+
+# Eleven - development / test dependencies (install with: pip install -e ".[dev]")
+pytest>=8.0
+ruff>=0.4
+mypy>=1.10

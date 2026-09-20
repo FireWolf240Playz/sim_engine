@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eleven-sim"
+version = "0.1.0"
+description = "Eleven: a pre-deployment digital-twin cloud-resilience simulator (SimPy + Pydantic)."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Eleven" }]
+keywords = [
+  "simulation",
+  "simpy",
+  "cloud",
+  "resilience",
+  "chaos-engineering",
+  "digital-twin",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Simulation",
+  "Typing :: Typed",
+]
+dependencies = [
+  "simpy>=4.1,<5",
+  "numpy>=2.0",
+  "pandas>=2.0",
+  "matplotlib>=3.8",
+  "pydantic>=2.0,<3",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+eleven-sim = "sim_core.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["sim_core*"]
+
+[tool.setuptools.package-data]
+sim_core = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true

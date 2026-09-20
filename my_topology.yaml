@@ -1,0 +1,68 @@
+# Eleven example topology: e-commerce read path.
+#   nginx-style LB -> 2 app workers (50/50 fan-out) -> Redis cache -> Postgres
+# A traffic spike hits at t=45, and a half-capacity database failure window
+# at t=60 shows up in the latency/SLA numbers.
+seed: 7
+duration: 100.0
+metrics_interval: 2.0
+sla_target: 15.0
+
+topology:
+  nodes:
+    - name: alb
+      role: load_balancer
+      max_capacity: 16
+      service_time: 0.4
+    - name: worker-a
+      role: worker
+      max_capacity: 8
+      service_time: 1.2
+    - name: worker-b
+      role: worker
+      max_capacity: 8
+      service_time: 1.4
+    - name: redis
+      role: cache
+      max_capacity: 12
+      service_time: 0.2
+      hit_rate: 0.8
+    - name: postgres
+      role: database
+      max_capacity: 5
+      service_time: 4.0
+  edges:
+    - source: alb
+      target: worker-a
+      probability: 0.5
+    - source: alb
+      target: worker-b
+      probability: 0.5
+    - source: worker-a
+      target: redis
+      probability: 1.0
+    - source: worker-b
+      target: redis
+      probability: 1.0
+    - source: redis
+      target: postgres
+      probability: 1.0
+  entry_node: alb
+
+traffic:
+  base_rps: 2.0
+  duration: 100.0
+  spike_rps: 8.0
+  spike_start: 45.0
+  spike_duration: 15.0
+
+chaos:
+  - event_type: component_failure
+    intensity: 0.5
+    start_time: 60.0
+    interval: 40.0
+    duration: 12.0
+  - event_type: cache_outage
+    intensity: 1.0
+    start_time: 75.0
+    interval: 45.0
+    duration: 8.0
