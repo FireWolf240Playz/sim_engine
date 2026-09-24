@@ -1,12 +1,12 @@
 {
-  "requests": 302,
+  "requests": 222,
   "completion_rate": 1.0,
   "failed_requests": 0,
-  "sla_compliance": 0.9834437086092715,
-  "avg_latency": 2.9422709750739506,
-  "p50_latency": 1.8375077050262676,
-  "p95_latency": 8.759218970323133,
-  "p99_latency": 18.26870352507791,
-  "cache_hit_rate": 0.799163179916318,
+  "sla_compliance": 0.8513513513513513,
+  "avg_latency": 11.654237609770876,
+  "p50_latency": 8.934819716480638,
+  "p95_latency": 26.57996916329875,
+  "p99_latency": 39.62059430105234,
+  "cache_hit_rate": 0.7522522522522522,
   "total_retries": 0
 }

@@ -1,0 +1,102 @@
+# ============================================================================
+# Eleven example: "API stack under load + chaos"
+#
+#   lb ──(0.7)──> web-a ──┐
+#    └──(0.3)──> web-b ──┤
+#                        ├──> redis (80% hits stop here)
+#                        │        └──(miss)──> postgres
+#                        └──(0.2)──> stripe_api (external payment call)
+#
+# What this scenario demonstrates:
+#   * probabilistic branching (70/30 worker split, 20% of traffic fans out
+#     to an external API in parallel with the data path)
+#   * a traffic spike (4x RPS) at t=40
+#   * all three chaos event types, each in a different window:
+#       - component_failure : postgres runs at 50% capacity for 15 s
+#       - network_latency   : everything gets 60% slower service times
+#       - cache_outage      : redis hit-rate forced to 0 (all reads hit DB)
+#
+# Run it with:
+#   python -m sim_core run examples/api_stack.yaml \
+#       --report api_stack_report.png --json api_stack_summary.json
+# ============================================================================
+
+seed: 42                # fixed seed => reproducible results
+duration: 120.0         # total simulated seconds
+metrics_interval: 2.0   # sample utilization every 2 s
+sla_target: 15.0        # seconds; flagged in the report when p95 exceeds it
+
+topology:
+  nodes:
+    - name: lb
+      role: load_balancer
+      max_capacity: 32          # concurrent in-flight connections
+      service_time: 0.2         # avg time per request at this hop (s)
+
+    - name: web-a
+      role: worker
+      max_capacity: 10
+      service_time: 0.8
+      timeout: 5.0              # give up waiting for a slot after 5 s
+      retry_limit: 2            # ...but try again up to 2 times
+      retry_backoff: 0.3        # wait 0.3 s between attempts
+
+    - name: web-b
+      role: worker
+      max_capacity: 6           # smaller instance => busier under load
+      service_time: 0.9
+      timeout: 5.0
+      retry_limit: 2
+      retry_backoff: 0.3
+
+    - name: redis
+      role: cache
+      max_capacity: 20
+      service_time: 0.05
+      hit_rate: 0.8             # 80% of lookups are cache hits (end branch)
+
+    - name: postgres
+      role: database
+      max_capacity: 4           # deliberately small: bottleneck under spikes
+      service_time: 1.5
+      timeout: 10.0
+      retry_limit: 3
+      retry_backoff: 0.5
+
+    - name: stripe_api
+      role: external_api        # plain capacity hop: no special behaviour
+      max_capacity: 8
+      service_time: 2.0         # third-party latency, usually slowest hop
+
+  edges:                        # probability = share of traffic per outgoing edge
+    - { source: lb,        target: web-a,      probability: 0.7 }
+    - { source: lb,        target: web-b,      probability: 0.3 }
+    - { source: web-a,     target: redis,      probability: 0.8 }
+    - { source: web-a,     target: stripe_api, probability: 0.2 }
+    - { source: web-b,     target: redis,      probability: 1.0 }
+    - { source: redis,     target: postgres,   probability: 1.0 }  # on miss
+
+  entry_node: lb
+
+traffic:
+  base_rps: 3.0           # sustained arrival rate
+  duration: 120.0         # keep in sync with global duration
+  spike_rps: 12.0         # 4x surge ...
+  spike_start: 40.0       # ...starting at t=40 ...
+  spike_duration: 20.0    # ...lasting 20 s
+
+chaos:
+  - event_type: component_failure    # cut postgres to 50% capacity
+    intensity: 0.5
+    start_time: 70.0
+    duration: 15.0
+
+  - event_type: network_latency      # +60% service time on every component
+    intensity: 0.6
+    start_time: 85.0
+    duration: 10.0
+
+  - event_type: cache_outage         # redis hit-rate -> 0, all reads hit postgres
+    intensity: 1.0
+    start_time: 100.0
+    duration: 10.0

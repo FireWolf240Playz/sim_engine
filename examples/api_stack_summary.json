@@ -1,0 +1,12 @@
+{
+  "requests": 564,
+  "completion_rate": 1.0,
+  "failed_requests": 0,
+  "sla_compliance": 1.0,
+  "avg_latency": 1.8359320595001627,
+  "p50_latency": 1.1954974173133386,
+  "p95_latency": 6.026345395255606,
+  "p99_latency": 8.864778561315728,
+  "cache_hit_rate": 0.7632241813602015,
+  "total_retries": 0
+}

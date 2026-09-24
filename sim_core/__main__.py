@@ -18,6 +18,14 @@ Subcommands
     windows, without needing a config file::
 
         python -m sim_core demo
+
+``prices``
+    Browse / resolve live Azure retail prices (no API key required). Results
+    are cached locally for 7 days; on network failure the last cached price
+    is served and flagged::
+
+        python -m sim_core prices list "Virtual Machines" --sku B2 --region westeurope
+        python -m sim_core prices resolve "B2s v2" --service "Virtual Machines"
 """
 
 from __future__ import annotations
@@ -40,6 +48,13 @@ from sim_core import (
     TopologyConfig,
     TrafficPattern,
     render_report,
+)
+from sim_core.price_source import (
+    AZURE_PRICES_API,
+    AzureCatalog,
+    PriceLookupError,
+    ResolvedPrice,
+    make_catalog,
 )
 
 DEFAULT_REPORT = "eleven_report.png"
@@ -186,6 +201,97 @@ def run_simulation(
     return summary
 
 
+_HOURS_PER_MONTH: float = 730.0
+_HOURS_PER_YEAR: float = 8760.0
+
+
+def _fmt_rate(value: Optional[float]) -> str:
+    """Format an hourly rate (``n/a`` when the tier is absent).
+
+    Sub-dollar rates are rendered in cents so ``0.809`` reads as ``80.9¢/h``
+    instead of an ambiguous decimal fraction of a dollar.
+    """
+    if value is None:
+        return "n/a"
+    if value < 1.0:
+        return f"{value * 100:.1f}¢/h"
+    return f"${value:,.2f}/h"
+
+
+def _fmt_money(value: float) -> str:
+    """Format a dollar amount with precision scaled to the magnitude."""
+    if value < 1.0:
+        return f"${value * 100:.1f}¢"
+    if value < 100.0:
+        return f"${value:,.2f}"
+    return f"${value:,.0f}"
+
+
+def _print_price_table(
+    prices: List[ResolvedPrice], *, service: str, region: str
+) -> None:
+    """Render resolved prices as an aligned console table (currency per price)."""
+    currency = prices[0].currency if prices else "USD"
+    print(f"Azure prices - service: {service} | region: {region} | currency: {currency}")
+    print(
+        f"{'SKU':<18} {'Product':<38} {'On-demand':>15} {'Reserved 1y':>15} {'Reserved 3y':>15}"
+    )
+    for price in prices:
+        product = price.product_name if len(price.product_name) <= 38 else price.product_name[:37] + "…"
+        sku = price.sku if len(price.sku) <= 18 else price.sku[:17] + "…"
+        print(
+            f"{sku:<18} {product:<38} "
+            f"{_fmt_rate(price.on_demand_per_hour):>15} "
+            f"{_fmt_rate(price.reserved_1y_per_hour):>15} "
+            f"{_fmt_rate(price.reserved_3y_per_hour):>15}"
+        )
+    print(
+        f"\n~ monthly / yearly (on-demand, {_HOURS_PER_MONTH:.0f} h/month, "
+        f"{_HOURS_PER_YEAR:.0f} h/year):"
+    )
+    for price in prices:
+        sku = price.sku if len(price.sku) <= 18 else price.sku[:17] + "…"
+        print(
+            f"  {sku:<18} {_fmt_money(price.on_demand_per_hour * _HOURS_PER_MONTH):>12}/month   "
+            f"{_fmt_money(price.on_demand_per_hour * _HOURS_PER_YEAR):>12}/year"
+        )
+    newest = max((p.fetched_at for p in prices), default=None)
+    if newest is not None:
+        note = " (served from local cache)" if any(p.from_cache for p in prices) else ""
+        print(f"\nsource: {AZURE_PRICES_API}")
+        print(f"fetched: {newest:%Y-%m-%d %H:%M} UTC{note}")
+
+
+def _cmd_prices(args: argparse.Namespace) -> int:
+    """Dispatch the ``prices`` subcommand (list / resolve)."""
+    catalog: AzureCatalog = make_catalog(args.cache_path)
+    try:
+        if args.prices_command == "list":
+            prices = catalog.list_skus(
+                args.service,
+                region=args.region,
+                sku_contains=args.sku,
+                limit=args.limit,
+                product_contains=args.product or None,
+            )
+            _print_price_table(prices, service=args.service, region=args.region)
+        else:  # resolve
+            price = catalog.resolve(
+                args.sku,
+                service=args.service,
+                region=args.region,
+                product_contains=args.product or None,
+                refresh=args.refresh,
+            )
+            if price.from_cache:
+                print("warning: fresh fetch failed - serving the last cached price", file=sys.stderr)
+            _print_price_table([price], service=args.service, region=args.region)
+    except PriceLookupError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The ``python -m sim_core`` command-line interface."""
     parser = argparse.ArgumentParser(
@@ -222,12 +328,70 @@ def build_parser() -> argparse.ArgumentParser:
         "demo",
         help="Run the built-in demo topology (no config file needed).",
     )
+
+    prices_p = sub.add_parser(
+        "prices",
+        help="Browse / resolve live Azure retail prices (no API key required).",
+    )
+    prices_sub = prices_p.add_subparsers(dest="prices_command", required=True)
+
+    list_p = prices_sub.add_parser(
+        "list",
+        help="List SKUs of an Azure service with on-demand and reserved hourly rates.",
+    )
+    list_p.add_argument(
+        "service",
+        help='Azure service name, e.g. "Virtual Machines" or "Caching for Redis".',
+    )
+    list_p.add_argument(
+        "--sku",
+        default=None,
+        help="Only SKUs whose name contains this substring (case-insensitive).",
+    )
+    list_p.add_argument("--region", default="westeurope", help="Azure region (default: westeurope).")
+    list_p.add_argument("--limit", type=int, default=15, help="Max SKUs to display (default: 15).")
+    list_p.add_argument(
+        "--product",
+        default="linux",
+        help="Prefer products whose name contains this (default: linux; empty string = any).",
+    )
+    list_p.add_argument(
+        "--cache-path",
+        default=None,
+        help="Path of the local price cache file (default: ~/.eleven/prices_cache.json).",
+    )
+
+    resolve_p = prices_sub.add_parser(
+        "resolve",
+        help="Resolve one SKU to concrete hourly rates (on-demand + reserved 1y/3y).",
+    )
+    resolve_p.add_argument("sku", help='SKU name, e.g. "B2s v2".')
+    resolve_p.add_argument("--service", required=True, help='Azure service name, e.g. "Virtual Machines".')
+    resolve_p.add_argument("--region", default="westeurope", help="Azure region (default: westeurope).")
+    resolve_p.add_argument(
+        "--product",
+        default="linux",
+        help="Prefer products whose name contains this (default: linux; empty string = any).",
+    )
+    resolve_p.add_argument(
+        "--cache-path",
+        default=None,
+        help="Path of the local price cache file (default: ~/.eleven/prices_cache.json).",
+    )
+    resolve_p.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Bypass the cache TTL and force a fresh fetch.",
+    )
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point. Returns a process exit code."""
     args = build_parser().parse_args(argv)
+
+    if args.command == "prices":
+        return _cmd_prices(args)
 
     if args.command == "demo":
         config = default_config()
