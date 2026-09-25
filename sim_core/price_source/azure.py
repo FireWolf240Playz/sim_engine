@@ -1,112 +1,37 @@
-"""Live cloud pricing via the Azure Retail Prices API (USD, no API key).
+"""Azure retail price catalog (``prices.azure.com``, OData ``$filter``).
 
-Eleven's cost model stays **offline and deterministic at run time**: this
-module resolves *concrete hourly rates* from Azure's public retail-pricing
-endpoint and hands them to the rest of the system as plain configuration
-data. The SimPy engine itself never touches the network.
+Provider API notes (verified live, 2026-09): USD only (other
+``currencyCode`` filters return zero rows). All billing modes come back in
+ONE item list, classified by:
 
-Pricing modes (real-world semantics):
+* ``type == "Consumption"``        -> on-demand, ``retailPrice`` per hour;
+* ``type == "Reservation"``        -> committed-use, ``retailPrice`` is the
+  TOTAL prepaid for the ``reservationTerm`` ("1 Year" / "3 Years");
+* ``type == "DevTestConsumption"`` -> excluded (dev/test meters).
 
-* **on-demand** - pay-as-you-go sticker price, no commitment;
-* **reserved 1y / 3y** - committed-use (a.k.a. "commit plan" / reservation)
-  rates, discounted but prepaid for the term. ``None`` when the SKU has no
-  committed-use offering (serverless services are pay-per-use only).
-
-API schema notes (verified live against ``prices.azure.com``, 2026-09):
-
-* The endpoint serves **USD only** (``BillingCurrency`` is always USD, and
-  other ``currencyCode`` filters return zero rows) - conversion to other
-  currencies is intentionally left to a future FX step.
-* All billing modes come back in ONE item list, classified by:
-  - ``type == "Consumption"``        -> on-demand, ``retailPrice`` per hour;
-  - ``type == "Reservation"``        -> committed-use, ``retailPrice`` is the
-    TOTAL prepaid for the ``reservationTerm`` ("1 Year" / "3 Years");
-  - ``type == "DevTestConsumption"`` -> excluded (dev/test meters).
-* ``priceType`` / ``termType`` are NOT valid OData filters on this endpoint
-  (they return HTTP 400 "Invalid OData parameters supplied"), so the
-  classification is done client-side.
-
-Behaviour:
-
-* Prices are cached to a local JSON file (default
-  ``~/.eleven/prices_cache.json``) with a 7-day TTL;
-* If the network is unavailable, :meth:`AzureCatalog.resolve` falls back to
-  the last known good cached price and flags it ``from_cache=True``;
-* Only the Python standard library is used (``urllib``) - no new dependency.
+``priceType`` / ``termType`` are NOT valid OData filters (HTTP 400), so
+classification is done client-side.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
-#: Azure's public retail prices endpoint (OData-style ``$filter`` queries).
-AZURE_PRICES_API: str = "https://prices.azure.com/api/retail/prices"
-
-#: The only currency the endpoint actually serves (verified live).
-SUPPORTED_CURRENCY: str = "USD"
-
-#: Hours in one billing year (the unit of every rate in this module).
-HOURS_PER_YEAR: float = 8760.0
-
-#: Default location of the local price cache.
-DEFAULT_CACHE_PATH: Path = Path.home() / ".eleven" / "prices_cache.json"
-
-#: Prices older than this are refetched when the network is available.
-DEFAULT_TTL_SECONDS: float = 7 * 24 * 3600
-
-#: Per-request timeout for the pricing API.
-DEFAULT_TIMEOUT_SECONDS: float = 20.0
-
-_MAX_PAGES: int = 8
-_MAX_CACHE_ENTRIES: int = 256
-_USER_AGENT: str = "eleven-sim/0.1 (pre-deployment cloud resilience simulator)"
-
-#: Row ``type`` values we understand.
-_TYPE_CONSUMPTION: str = "Consumption"
-_TYPE_RESERVATION: str = "Reservation"
-
-
-class PriceLookupError(RuntimeError):
-    """A price could not be resolved (bad SKU/service, empty result, network down)."""
-
-
-class ResolvedPrice(BaseModel):
-    """Hourly unit price for one Azure SKU (USD).
-
-    This is *configuration-side* data (numbers, strings) - it is never used
-    as live simulation state, keeping the SimPy engine pure and deterministic.
-
-    ``reserved_*`` values are the committed-use **hourly equivalents**: the
-    API reports the total prepaid for the term, and we divide by the term
-    hours (1y -> 8760 h, 3y -> 26280 h). ``None`` when the SKU has no
-    committed-use offering.
-    """
-
-    provider: str = "azure"
-    service: str
-    product_name: str
-    sku: str
-    region: str
-    currency: str = SUPPORTED_CURRENCY
-    on_demand_per_hour: float = Field(gt=0.0, description="Pay-as-you-go hourly rate.")
-    reserved_1y_per_hour: Optional[float] = Field(
-        default=None, ge=0.0, description="Committed-use 1-year hourly rate, if offered."
-    )
-    reserved_3y_per_hour: Optional[float] = Field(
-        default=None, ge=0.0, description="Committed-use 3-year hourly rate, if offered."
-    )
-    source: str = AZURE_PRICES_API
-    fetched_at: datetime
-    from_cache: bool = Field(default=False, description="True when served from the local cache.")
+from .base import CatalogBase, PriceLookupError, ResolvedPrice
+from .constants import (
+    AZURE_PRICES_API,
+    DEFAULT_CACHE_PATH,
+    DEFAULT_TIMEOUT_SECONDS,
+    DEFAULT_TTL_SECONDS,
+    HOURS_PER_YEAR,
+    SUPPORTED_CURRENCY,
+    _MAX_PAGES,
+    _TYPE_CONSUMPTION,
+    _TYPE_RESERVATION,
+)
 
 
 def _escape_odata(value: str) -> str:
@@ -119,7 +44,7 @@ def _eq_clause(field: str, value: str) -> str:
     return f"{field} eq '{_escape_odata(value)}'"
 
 
-class AzureCatalog:
+class AzureCatalog(CatalogBase):
     """Resolve Azure SKU prices from the public retail-prices API.
 
     Parameters
@@ -139,33 +64,11 @@ class AzureCatalog:
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
-        self._cache_path: Path = Path(cache_path)
-        self._ttl: float = ttl_seconds
-        self._timeout: float = timeout
+        super().__init__(cache_path, ttl_seconds, timeout)
 
     # ------------------------------------------------------------------ #
-    # HTTP / query layer
+    # Query layer (OData ``$filter``)
     # ------------------------------------------------------------------ #
-    def _http_get_json(self, url: str) -> Dict[str, Any]:
-        """GET ``url`` and decode the JSON body (raises :class:`PriceLookupError`)."""
-        request = urllib.request.Request(
-            url, headers={"User-Agent": _USER_AGENT, "Accept": "application/json"}
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
-                payload = response.read().decode("utf-8")
-        except (urllib.error.URLError, urllib.error.HTTPError, OSError, TimeoutError) as exc:
-            raise PriceLookupError(f"network request to the Azure pricing API failed: {exc}") from exc
-        try:
-            data = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise PriceLookupError(
-                f"expected JSON from the Azure pricing API, got: {payload[:120]!r}"
-            ) from exc
-        if not isinstance(data, dict):
-            raise PriceLookupError(f"unexpected payload shape from the Azure pricing API: {type(data)!r}")
-        return data
-
     def _query(self, *clauses: str) -> List[Dict[str, Any]]:
         """Run a ``$filter`` query, following ``NextPageLink`` pagination."""
         filter_expr = " and ".join(clauses)
@@ -274,6 +177,7 @@ class AzureCatalog:
             sku=str(on_demand.get("skuName") or sku),
             region=str(on_demand.get("armRegionName") or region),
             currency=SUPPORTED_CURRENCY,
+            unit="Hour",
             on_demand_per_hour=self._hourly_rate(on_demand, None),
             reserved_1y_per_hour=(
                 self._hourly_rate(reserved_1y, 1) if reserved_1y is not None else None
@@ -281,57 +185,9 @@ class AzureCatalog:
             reserved_3y_per_hour=(
                 self._hourly_rate(reserved_3y, 3) if reserved_3y is not None else None
             ),
+            source=AZURE_PRICES_API,
             fetched_at=fetched_at or datetime.now(timezone.utc),
         )
-
-    # ------------------------------------------------------------------ #
-    # Cache layer
-    # ------------------------------------------------------------------ #
-    def _load_cache(self) -> Dict[str, Any]:
-        if not self._cache_path.is_file():
-            return {"version": 1, "entries": {}}
-        try:
-            data = json.loads(self._cache_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {"version": 1, "entries": {}}
-        if not isinstance(data, dict) or not isinstance(data.get("entries"), dict):
-            return {"version": 1, "entries": {}}
-        return data
-
-    def _save_cache(self, data: Dict[str, Any]) -> None:
-        entries = data.setdefault("entries", {})
-        if len(entries) > _MAX_CACHE_ENTRIES:
-            oldest_first = sorted(entries.items(), key=lambda kv: str(kv[1].get("fetched_at", "")))
-            for key, _ in oldest_first[: len(entries) - _MAX_CACHE_ENTRIES]:
-                entries.pop(key, None)
-        try:
-            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self._cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        except OSError as exc:
-            raise PriceLookupError(f"could not write the price cache at {self._cache_path!r}: {exc}") from exc
-
-    def _is_fresh(self, cached: Dict[str, Any]) -> bool:
-        try:
-            fetched = datetime.fromisoformat(str(cached.get("fetched_at")))
-        except ValueError:
-            return False
-        if fetched.tzinfo is None:
-            fetched = fetched.replace(tzinfo=timezone.utc)
-        age = (datetime.now(timezone.utc) - fetched).total_seconds()
-        return 0 <= age <= self._ttl
-
-    @staticmethod
-    def _cache_key(*parts: str) -> str:
-        digest = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-        return digest[:32]
-
-    def _store(self, key: str, price: ResolvedPrice) -> None:
-        cache = self._load_cache()
-        cache.setdefault("entries", {})[key] = {
-            "fetched_at": price.fetched_at.isoformat(),
-            "price": price.model_dump(mode="json"),
-        }
-        self._save_cache(cache)
 
     # ------------------------------------------------------------------ #
     # Public API
