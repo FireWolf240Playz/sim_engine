@@ -1,0 +1,51 @@
+{
+  "requests": 230,
+  "completion_rate": 1.0,
+  "failed_requests": 0,
+  "sla_compliance": 0.9652173913043478,
+  "avg_latency": 3.1065278699753223,
+  "p50_latency": 1.7523087580553955,
+  "p95_latency": 14.035798163511743,
+  "p99_latency": 20.94038621593692,
+  "cache_hit_rate": 0.7821229050279329,
+  "total_retries": 0,
+  "total_cost": 0,
+  "cost_breakdown_by_component": {},
+  "component_sizing": {
+    "alb": {
+      "mean_utilization": 0.05875,
+      "p95_utilization": 0.2843749999999998,
+      "p95_queue": 0.0,
+      "recommended_capacity": 6,
+      "status": "oversized"
+    },
+    "worker-a": {
+      "mean_utilization": 0.1625,
+      "p95_utilization": 0.5,
+      "p95_queue": 0.0,
+      "recommended_capacity": 6,
+      "status": "oversized"
+    },
+    "worker-b": {
+      "mean_utilization": 0.215,
+      "p95_utilization": 0.5,
+      "p95_queue": 0.0,
+      "recommended_capacity": 6,
+      "status": "oversized"
+    },
+    "redis": {
+      "mean_utilization": 0.03166666666666666,
+      "p95_utilization": 0.16666666666666666,
+      "p95_queue": 0.0,
+      "recommended_capacity": 2,
+      "status": "oversized"
+    },
+    "postgres": {
+      "mean_utilization": 0.46399999999999997,
+      "p95_utilization": 1.0,
+      "p95_queue": 6.549999999999997,
+      "recommended_capacity": 13,
+      "status": "oversized"
+    }
+  }
+}

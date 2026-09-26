@@ -48,6 +48,9 @@ class MetricsCollector:
         self.requests: List[RequestRecord] = []
         self.utilization: List[UtilizationSample] = []
         self.retry_counts: Dict[str, int] = {}
+        self.cost_by_component: Dict[str, float] = {}
+        self.sizing: Dict[str, Dict[str, Any]] = {}
+        self._last_sample_time: Optional[float] = None
 
     # -- recording ---------------------------------------------------------
     def record_request(self, record: RequestRecord) -> None:
@@ -63,6 +66,7 @@ class MetricsCollector:
         return sum(self.retry_counts.values())
 
     def sample_utilization(self, env_now: float) -> None:
+        self._accumulate_cost(env_now)
         per: Dict[str, Dict[str, float]] = {}
         for comp in self._topology.components:
             per[comp.name] = {
@@ -73,9 +77,100 @@ class MetricsCollector:
             }
         self.utilization.append(UtilizationSample(time=env_now, per_component=per))
 
+    # -- sizing analysis ----------------------------------------------------
+    @staticmethod
+    def _verdict(mean_utilization: float) -> str:
+        """Classify one component's sizing from its mean utilisation.
+
+        Mean utilisation is the verdict driver: in steady state it equals
+        offered load per provisioned slot (Little's law, independent of the
+        service-time distribution) - the classic capacity-planning number and
+        the one provider dashboards report. Deliberately coarse - a
+        directional FinOps signal, not a benchmark. (Tail statistics like the
+        p95 of point-in-time utilisation or queue length are deliberately
+        *not* used for the verdict: even a healthy queueing system briefly
+        saturates and queues often enough to sit in its own p95 tail, so a
+        tail-based verdict misflags well-provisioned components.)
+        """
+        if mean_utilization >= 0.85:
+            return "undersized"
+        if mean_utilization <= 0.5:
+            return "oversized"
+        return "right_sized"
+
+    def _accumulate_cost(self, env_now: float) -> None:
+        """Add the cost accrued since the previous sample (called every tick).
+
+        Two-part billing, mirroring how real services price (instance-hour
+        base + metered usage): each component accrues
+        ``cost_per_hour * (max_capacity + in_use + queue_length) * dt``.
+        The ``max_capacity`` term is the *provisioned* base - you pay for the
+        slots you sized whether they are busy or not (oversizing therefore
+        shows up as waste); the ``in_use + queue`` term meters the active
+        workload, so a chaotic run that saturates and queues costs more than
+        a healthy one. Components with ``cost_per_hour == 0`` contribute
+        nothing.
+        """
+        if self._last_sample_time is None:
+            self._last_sample_time = env_now
+            return
+        dt = env_now - self._last_sample_time
+        if dt <= 0.0:
+            return
+        for comp in self._topology.components:
+            rate = comp.config.cost_per_hour
+            if rate <= 0.0:
+                continue
+            billed_slots = comp.capacity + comp.in_use + comp.queue_length
+            self.cost_by_component[comp.name] = (
+                self.cost_by_component.get(comp.name, 0.0) + rate * billed_slots * dt
+            )
+        self._last_sample_time = env_now
+
+    def settle_cost(self, end_time: float) -> None:
+        """Accrue cost for the final interval after the last periodic sample.
+
+        ``env.run(until=D)`` can stop before the sampler's tick at t=D is
+        processed, which would silently drop the last ``metrics_interval`` of
+        billing; calling this once at the horizon closes that gap. No-op when
+        nothing is pending (no prior sample, or zero/negative dt).
+        """
+        self._accumulate_cost(end_time)
+
     # -- aggregation -------------------------------------------------------
+    def _compute_sizing(self) -> None:
+        """Fill ``self.sizing`` from the accumulated utilisation samples.
+
+        Per component: mean utilisation (the verdict driver - in steady state
+        it equals offered load per slot), p95 utilisation and p95 queue
+        (context for the report), and ``recommended_capacity`` = ceil(p99 of
+        concurrent demand ``in_use + queue``) - "size to your p99 demand",
+        the classic right-sizing number (most meaningful on longer runs with
+        many samples). Always computed, cost-independent, so the report can
+        advise on sizing even for a run with no rates configured.
+        """
+        self.sizing.clear()
+        if not self.utilization:
+            return
+        for comp in self._topology.components:
+            name = comp.name
+            util = np.array([s.per_component[name]["utilization"] for s in self.utilization])
+            queue = np.array([s.per_component[name]["queue_length"] for s in self.utilization])
+            demand = util * comp.capacity + queue  # == in_use + queue per sample
+            mean_utilization = float(np.mean(util))
+            p95_utilization = float(np.percentile(util, 95))
+            p95_queue = float(np.percentile(queue, 95))
+            self.sizing[name] = {
+                "mean_utilization": mean_utilization,
+                "p95_utilization": p95_utilization,
+                "p95_queue": p95_queue,
+                "recommended_capacity": max(1, int(np.ceil(np.percentile(demand, 99)))),
+                "status": self._verdict(mean_utilization),
+            }
+
     def summary(self) -> Dict[str, Any]:
         """Headline metrics over all completed requests."""
+        self._compute_sizing()
         if not self.requests:
             return {
                 "requests": 0,
@@ -88,6 +183,9 @@ class MetricsCollector:
                 "p99_latency": None,
                 "cache_hit_rate": None,
                 "total_retries": 0,
+                "total_cost": sum(self.cost_by_component.values()),
+                "cost_breakdown_by_component": dict(self.cost_by_component),
+                "component_sizing": dict(self.sizing),
             }
 
         latencies = np.array([r.latency for r in self.requests], dtype=float)
@@ -112,6 +210,9 @@ class MetricsCollector:
             "p99_latency": float(np.percentile(latencies, 99)),
             "cache_hit_rate": cache_hit_rate,
             "total_retries": self.total_retries,
+            "total_cost": sum(self.cost_by_component.values()),
+            "cost_breakdown_by_component": dict(self.cost_by_component),
+            "component_sizing": dict(self.sizing),
         }
 
     def requests_df(self) -> pd.DataFrame:

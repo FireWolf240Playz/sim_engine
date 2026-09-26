@@ -103,6 +103,15 @@ class ComponentConfig(BaseModel):
         ge=0.0,
         description="Seconds to wait between retry attempts after a timeout.",
     )
+    cost_per_hour: float = Field(
+        0.0,
+        ge=0.0,
+        description=(
+            "Simulated cost rate in USD per active slot-hour (the provider's "
+            "hourly rate for this service tier). 0.0 (default) disables cost "
+            "accounting for this component."
+        ),
+    )
 
 
 class LoadBalancerConfig(ComponentConfig):

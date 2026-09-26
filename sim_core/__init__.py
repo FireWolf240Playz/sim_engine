@@ -34,6 +34,9 @@ Quick start::
     simulator = CloudSimulator(config)
     summary = simulator.run()
     render_report(simulator.collector)
+
+Provider-calibrated starting points (AWS/Azure/GCP small tiers) live in
+:mod:`sim_core.presets`, e.g. ``from sim_core.presets import aws_rds_small``.
 """
 
 from __future__ import annotations

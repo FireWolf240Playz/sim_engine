@@ -131,6 +131,22 @@ def _format_summary(summary: Dict[str, Any]) -> str:
         f"P99 latency (s) .......... {_fmt_seconds(summary['p99_latency'])}",
         f"Cache hit rate ........... {_fmt_fraction(summary['cache_hit_rate'])}",
     ]
+    total_cost = summary.get("total_cost")
+    if total_cost:
+        lines.append(f"Estimated cost ........... ${total_cost:.2f}")
+        for name, cost in summary.get("cost_breakdown_by_component", {}).items():
+            lines.append(f"  - {name:<24} ${cost:.2f}")
+    sizing = summary.get("component_sizing") or {}
+    if sizing:
+        lines.append("")
+        lines.append("Right-sizing check (directional, from sampled utilisation)")
+        lines.append("-" * 52)
+        for name, info in sizing.items():
+            lines.append(
+                f"  - {name:<24} {info['status']:<12} "
+                f"(avg {info['mean_utilization'] * 100:.0f}% util, "
+                f"size-to {info['recommended_capacity']})"
+            )
     return "\n".join(lines)
 
 

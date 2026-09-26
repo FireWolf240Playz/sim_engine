@@ -48,8 +48,12 @@ class CloudSimulator:
     def __init__(self, config: SimulationConfig) -> None:
         self.config = config
         self.env = simpy.Environment()
-        # A single shared RNG keeps the whole run reproducible for a fixed seed.
-        self.rng = np.random.default_rng(config.seed)
+        # Two independent RNG streams from one seed: arrivals get their own
+        # stream so the arrival pattern is identical across scenarios - only
+        # what chaos/service behavior does differs between runs. (A single
+        # shared stream would let scenario behavior shift *which* random values
+        # the arrival process consumes, confounding any A/B comparison.)
+        self._arrival_rng, self.rng = np.random.default_rng(config.seed).spawn(2)
         self.topology = Topology(self.env, config.topology)
         self.collector = MetricsCollector(self.topology)
         self._req_counter = 0
@@ -210,7 +214,7 @@ class CloudSimulator:
     def _spawn_processes(self) -> None:
         """Schedule the traffic generator, every chaos event, and metric sampler."""
         env = self.env
-        env.process(generate_traffic(env, self.config.traffic, self.serve_request, self.rng))
+        env.process(generate_traffic(env, self.config.traffic, self.serve_request, self._arrival_rng))
         for event in self.config.chaos:
             env.process(chaos_mod.inject(env, self.topology, event, self.rng))
         env.process(self.collect_utilization())
@@ -224,6 +228,7 @@ class CloudSimulator:
         """
         self._spawn_processes()
         self.env.run(until=self.config.duration)
+        self.collector.settle_cost(self.config.duration)
         return self.collector.summary()
 
     # -- convenience -------------------------------------------------------

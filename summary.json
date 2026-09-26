@@ -1,12 +1,44 @@
 {
-  "requests": 222,
+  "requests": 237,
   "completion_rate": 1.0,
   "failed_requests": 0,
-  "sla_compliance": 0.8513513513513513,
-  "avg_latency": 11.654237609770876,
-  "p50_latency": 8.934819716480638,
-  "p95_latency": 26.57996916329875,
-  "p99_latency": 39.62059430105234,
-  "cache_hit_rate": 0.7522522522522522,
-  "total_retries": 0
+  "sla_compliance": 0.8185654008438819,
+  "avg_latency": 11.363959621337576,
+  "p50_latency": 7.7008641811408935,
+  "p95_latency": 32.193799145451045,
+  "p99_latency": 38.0515776240015,
+  "cache_hit_rate": 0.7426160337552743,
+  "total_retries": 0,
+  "total_cost": 0,
+  "cost_breakdown_by_component": {},
+  "component_sizing": {
+    "load-balancer": {
+      "mean_utilization": 0.09743589743589744,
+      "p95_utilization": 0.4166666666666667,
+      "p95_queue": 0.0,
+      "recommended_capacity": 8,
+      "status": "oversized"
+    },
+    "app-worker": {
+      "mean_utilization": 0.7153846153846154,
+      "p95_utilization": 1.0,
+      "p95_queue": 50.8,
+      "recommended_capacity": 62,
+      "status": "right_sized"
+    },
+    "redis-cache": {
+      "mean_utilization": 0.08846153846153847,
+      "p95_utilization": 0.25,
+      "p95_queue": 0.0,
+      "recommended_capacity": 5,
+      "status": "oversized"
+    },
+    "postgres": {
+      "mean_utilization": 0.6461538461538462,
+      "p95_utilization": 1.0,
+      "p95_queue": 21.799999999999997,
+      "recommended_capacity": 29,
+      "status": "right_sized"
+    }
+  }
 }

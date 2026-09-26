@@ -89,6 +89,23 @@ summary = sim.run()          # headline metrics (dict)
 render_report(sim.collector)  # writes eleven_report.png
 ```
 
+### Provider-calibrated presets
+
+Don't want to invent `max_capacity` / `service_time` / `cost_per_hour` yourself? Start from a named small-tier preset — one per provider × role (AWS, Azure, GCP) — seeded from realistic, publicly published list prices and throughput ballparks:
+
+```python
+from sim_core.presets import aws_alb, aws_app_worker, aws_elasticache, aws_rds_small
+
+topology = TopologyConfig(
+    load_balancer=aws_alb(),          # ~ALB, $0.05/h class
+    app_worker=aws_app_worker(),      # ~EC2 t3-class, $0.05/h class
+    cache=aws_elasticache(),          # ~cache.t3.small, $0.05/h class
+    database=aws_rds_small(),         # ~db.t3.small, $0.05/h class
+)
+```
+
+The presets bake in a directional `cost_per_hour`, so cost + right-sizing reporting works out of the box. Tune any of them with `preset.model_copy(update={"max_capacity": 4, ...})`. The numbers are **directional estimates, not guaranteed benchmarks** — for exact live rates use the `aws-prices` / `prices` / `gcp-prices` catalog commands.
+
 ## Metrics
 
 | Metric | Meaning |
@@ -98,6 +115,11 @@ render_report(sim.collector)  # writes eleven_report.png
 | `sla_compliance` | **The key resilience signal** — fraction finishing within `sla_target`. |
 | `avg/p50/p95/p99_latency` | End-to-end latency distribution (computed over all completed requests). |
 | `cache_hit_rate` | Fraction of lookups served from cache (misses fall through to the DB). |
+| `total_cost` | Simulated spend over the run (USD). Two-part billing, mirroring real provider pricing: each component accrues `cost_per_hour × (max_capacity + in_use + queue) × dt` per sampling tick. The `max_capacity` term is the **provisioned base** - you pay for the slots you sized whether they are busy or not (oversizing therefore shows up as waste); the `in_use + queue` term meters the active workload, so a chaotic run that saturates and queues costs more than a healthy one. |
+| `cost_breakdown_by_component` | That total split per component. |
+| `component_sizing` | Per-component right-sizing verdict: `mean_utilization` (the verdict driver — in steady state it equals offered load per slot, the classic capacity-planning number), `p95_utilization` / `p95_queue` (context), `recommended_capacity` (size-to-your-p99 concurrent demand), and `status` — `undersized` (mean utilisation ≥ 85%), `right_sized`, or `oversized` (mean utilisation ≤ 50% — paying for slots that sit idle). Computed on every run, even with costs disabled. |
+
+Cost is opt-in: set `cost_per_hour` on any component in the config (e.g. the provider's hourly rate for that tier - the `azure-prices` / `aws-prices` / `gcp-prices` commands resolve live rates for exactly this). Leave it at the default `0.0` and cost fields report zero. The sizing check is independent of cost and always advises whether a topology is over-, under-, or well-provisioned for its load.
 
 The report also plots per-component queue depth and utilisation over time.
 
@@ -139,7 +161,7 @@ Each event holds the disruption for `duration`, restores the original value, and
 
 ## Reproducibility
 
-All randomness (arrivals, service times, cache hits, and chaos victim selection) draws from a single `numpy.random.default_rng(seed)`, so a fixed seed gives a bit-for-bit reproducible run.
+All randomness draws from `numpy.random.default_rng(seed)` split into two independent streams: one dedicated to traffic arrivals, one for service times / cache hits / chaos. A fixed seed gives a bit-for-bit reproducible run, and because arrivals live on their own stream, the arrival pattern is identical across scenarios with the same seed - so comparing a healthy run against a chaos run isolates the chaos effect itself rather than a shifted arrival stream.
 
 ## Testing
 
