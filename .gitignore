@@ -16,3 +16,4 @@ venv/
 # Simulation outputs
 summary.json
 *.png
+*.json
