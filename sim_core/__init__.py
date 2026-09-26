@@ -37,6 +37,10 @@ Quick start::
 
 Provider-calibrated starting points (AWS/Azure/GCP small tiers) live in
 :mod:`sim_core.presets`, e.g. ``from sim_core.presets import aws_rds_small``.
+
+The compare-runs engine (multi-cloud calibration, what-if A/B, capacity
+sweep + knee) lives in :mod:`sim_core.compare`, exposed on the CLI as
+``eleven compare multi-cloud|what-if|sweep``.
 """
 
 from __future__ import annotations

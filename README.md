@@ -106,6 +106,34 @@ topology = TopologyConfig(
 
 The presets bake in a directional `cost_per_hour`, so cost + right-sizing reporting works out of the box. Tune any of them with `preset.model_copy(update={"max_capacity": 4, ...})`. The numbers are **directional estimates, not guaranteed benchmarks** — for exact live rates use the `aws-prices` / `prices` / `gcp-prices` catalog commands.
 
+## Compare runs
+
+`compare` runs the same topology multiple times under different conditions and diffs the summaries — one engine, three faces:
+
+- **`multi-cloud`** — re-calibrates every component with a provider preset (AWS / Azure / GCP) and compares latency, SLA, retries, and cost side by side;
+- **`what-if`** — the baseline vs one or more patched parameters (e.g. shrink the database, heat up the spike);
+- **`sweep`** — one parameter over a value range, with a directional right-sizing **knee** (the last point where extra capacity still pays off).
+
+```bash
+# AWS vs Azure vs GCP for the same logical architecture
+python -m sim_core compare multi-cloud --topology my_topology.yaml \
+  --json comparison_mc.json --png comparison_mc.png
+
+# Baseline vs a shrunken database + a hotter spike
+python -m sim_core compare what-if --topology my_topology.yaml \
+  --set postgres.max_capacity=4 --set traffic.spike_rps=12 \
+  --json comparison_wf.json
+
+# Right-sizing sweep: where does extra DB capacity stop paying off?
+python -m sim_core compare sweep --topology my_topology.yaml \
+  --param postgres.max_capacity --values 2,4,8,16 --metric p95_latency \
+  --json comparison_sw.json --png comparison_sw.png
+```
+
+`--set PATH=VALUE` accepts top-level fields (`duration`), `traffic.*`, `chaos.<i>.*`, and `<node>.<field>` paths. Every mode prints a per-run metrics table plus the per-component right-sizing verdict, and writes the full diff (values + deltas vs baseline) with `--json` and a comparison chart with `--png`. Set a fixed `seed` in the config for meaningful A/B comparisons. Preset calibrations and the knee heuristic are **directional estimates, not benchmarks**.
+
+The engine is also a plain library — `from sim_core import compare` gives you `run_one`, `run_many`, `diff_runs`, `set_path`, `apply_provider`, `sweep`, and `knee_point` directly.
+
 ## Metrics
 
 | Metric | Meaning |
@@ -129,18 +157,24 @@ Strict separation of **configuration** (immutable Pydantic data) from **live sim
 
 ```
 sim_core/
-├── config.py       # Pydantic v2 models (validated config data only)
-├── topology.py     # Component + Topology: live simpy.Resource wrappers
-├── traffic.py      # Poisson arrivals, base curve + optional spike window
-├── chaos.py        # Real failure injection (capacity / latency / cache)
-├── metrics.py      # RequestRecord, utilisation samples, pandas aggregation
-├── engine.py       # CloudSimulator: wires everything into a simpy.Environment
-├── viz.py          # Matplotlib three-panel report -> PNG
-├── __main__.py     # CLI: `python -m sim_core run | demo`
-└── py.typed        # PEP 561: this is a fully-typed package
+├── config.py        # Pydantic v2 models (validated config data only)
+├── topology.py      # Component + Topology: live simpy.Resource wrappers
+├── traffic.py       # Poisson arrivals, base curve + optional spike window
+├── chaos.py         # Real failure injection (capacity / latency / cache)
+├── metrics.py       # RequestRecord, utilisation samples, pandas aggregation
+├── engine.py        # CloudSimulator: wires everything into a simpy.Environment
+├── compare.py       # Compare-runs engine: multi-cloud / what-if / sweep + knee
+├── presets.py       # Provider-calibrated component presets (aws/azure/gcp)
+├── viz.py           # Matplotlib reports -> PNG (run + comparison charts)
+├── __main__.py      # `python -m sim_core` entry point
+├── cli/             # argparse tree split by concern (the "control file" is __init__)
+│   ├── sim.py       #    run / demo / compare commands
+│   └── pricing.py   #    prices / aws-prices / gcp-prices catalog commands
+├── price_source/    # Provider price catalogs (azure / aws / gcp + constants)
+└── py.typed         # PEP 561: this is a fully-typed package
 
 tests/
-└── test_engine.py
+└── ...              # one suite per concern (engine, chaos, cost, presets, compare, ...)
 ```
 
 ### How the request path works

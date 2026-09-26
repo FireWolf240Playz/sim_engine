@@ -3,11 +3,13 @@
 Split by concern:
 
 * :mod:`sim_core.cli.sim` - the ``run`` / ``demo`` simulation commands
-  (demo topology, config loading, PNG + JSON outputs);
+  (demo topology, config loading, PNG + JSON outputs) and the ``compare``
+  command (multi-cloud / what-if / capacity sweep, engine in
+  :mod:`sim_core.compare`);
 * :mod:`sim_core.cli.pricing` - the ``prices`` / ``aws-prices`` /
   ``gcp-prices`` catalog commands (price table + provider handlers).
 
-This module is the "control file": it wires the two halves into one
+This module is the "control file": it wires the halves into one
 argparse tree and dispatches the parsed command.
 """
 
@@ -37,11 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-#: Pricing subcommands and their handlers (the rest are simulation commands).
+#: Subcommands with their own handler (the rest go through run_simulation).
 _COMMAND_HANDLERS: Dict[str, Callable[[argparse.Namespace], int]] = {
     "prices": pricing._cmd_prices,
     "aws-prices": pricing._cmd_aws_prices,
     "gcp-prices": pricing._cmd_gcp_prices,
+    "compare": sim._cmd_compare,
 }
 
 

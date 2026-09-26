@@ -114,7 +114,7 @@ def test_registry_covers_all_twelve_presets() -> None:
 def test_aws_preset_topology_runs_end_to_end() -> None:
     """The spec's DONE-WHEN: presets drop straight into a runnable simulation.
 
-    At 1.5 rps the preset worker (~5 rps capacity) and DB (~3 rps) are
+    At 1.5 rps the preset worker (~6.7 rps capacity) and DB (~4.8 rps) are
     comfortably sized, so the run must complete with a high completion rate,
     positive cost per component, and a sizing verdict for every component.
     """

@@ -26,9 +26,11 @@ a fully-populated, ready-to-use config so you never have to guess
 approximate small "on-demand / list-price" tiers (us-east-1 / eastus /
 us-central1 class) and are chosen so a default preset topology has a
 believable bottleneck ordering at ~1-2 rps: worker and database constrain,
-load balancer and cache do not. Live prices move; for exact rates use the
-``eleven aws-prices`` / ``eleven prices`` / ``eleven gcp-prices`` catalog
-commands instead.
+load balancer and cache do not. Performance is also differentiated per
+provider: each cloud's small tier has different concurrency and
+per-request latency, which is exactly what ``eleven compare multi-cloud``
+compares. Live prices move; for exact rates use the ``eleven aws-prices`` /
+``eleven prices`` / ``eleven gcp-prices`` catalog commands instead.
 
 Customizing: the models are frozen, so tune a preset with
 ``model_copy(update={...})`` rather than re-inventing it::
@@ -100,7 +102,8 @@ def aws_alb(name: str | None = None) -> LoadBalancerConfig:
 
     Approximates an ALB at light load: ~$0.0225/h per load balancer plus
     ~$0.008/LCU-h; ``cost_per_hour=0.05`` covers the hourly fee and a modest
-    LCU load. Directional estimate, not a benchmark.
+    LCU load. Mid-pack per-request latency of the three providers. Directional
+    estimate, not a benchmark.
     """
     return _preset(
         LoadBalancerConfig,
@@ -116,13 +119,15 @@ def aws_app_worker(name: str | None = None) -> AppWorkerConfig:
 
     Approximates a t3.small/t3.medium-class instance (2 vCPU, 2-4 GiB,
     ~$0.02-0.04/h); ``cost_per_hour=0.05`` is a rounded per-slot rate.
-    Directional estimate, not a benchmark.
+    Dedicated vCPUs give the most concurrent slots of the three small tiers
+    (8) at the fastest per-request service (1.2s). Directional estimate, not
+    a benchmark.
     """
     return _preset(
         AppWorkerConfig,
         name=name or "aws-worker",
         max_capacity=8,
-        service_time=1.5,
+        service_time=1.2,
         cost_per_hour=0.05,
     )
 
@@ -130,8 +135,10 @@ def aws_app_worker(name: str | None = None) -> AppWorkerConfig:
 def aws_elasticache(name: str | None = None) -> CacheConfig:
     """AWS ElastiCache for Redis, small tier (us-east-1).
 
-    Approximates a cache.t3.small-class node (~$0.054/h) at a typical
-    85% read hit rate. Directional estimate, not a benchmark.
+    Approximates a cache.t3.small-class node (2 vCPU, 2 GiB, ~$0.054/h) at a
+    typical 85% read hit rate. The largest of the three small cache tiers,
+    so it carries the most concurrent lookups (400) at the lowest per-request
+    service time (0.05s). Directional estimate, not a benchmark.
     """
     return _preset(
         CacheConfig,
@@ -146,14 +153,15 @@ def aws_elasticache(name: str | None = None) -> CacheConfig:
 def aws_rds_small(name: str | None = None) -> DatabaseConfig:
     """AWS RDS for PostgreSQL, small single-AZ tier (us-east-1).
 
-    Approximates a db.t3.small instance (~$0.046/h). Directional estimate,
-    not a benchmark.
+    Approximates a db.t3.small instance (2 vCPU, 2 GiB, ~$0.046/h). The
+    largest of the three small DB tiers: most concurrent queries (12) and the
+    fastest per-query service (2.5s). Directional estimate, not a benchmark.
     """
     return _preset(
         DatabaseConfig,
         name=name or "aws-rds",
-        max_capacity=10,
-        service_time=3.0,
+        max_capacity=12,
+        service_time=2.5,
         cost_per_hour=0.05,
     )
 
@@ -168,13 +176,14 @@ def azure_app_gateway(name: str | None = None) -> LoadBalancerConfig:
 
     Application Gateway bills an instance hourly fee plus LCU-hours;
     ``cost_per_hour=0.08`` approximates a small gateway at light load.
-    Directional estimate, not a benchmark.
+    Deeper per-request L7 inspection makes it the slowest gateway per request
+    of the three (0.25s). Directional estimate, not a benchmark.
     """
     return _preset(
         LoadBalancerConfig,
         name=name or "azure-app-gateway",
         max_capacity=200,
-        service_time=0.2,
+        service_time=0.25,
         cost_per_hour=0.08,
     )
 
@@ -182,14 +191,16 @@ def azure_app_gateway(name: str | None = None) -> LoadBalancerConfig:
 def azure_app_worker(name: str | None = None) -> AppWorkerConfig:
     """Azure burstable VM app worker, B-series (eastus class).
 
-    Approximates a B2s v2 VM (~$0.0832/h in eastus). Directional estimate,
-    not a benchmark.
+    Approximates a B2s v2 VM (2 vCPU, 4 GiB, ~$0.0832/h in eastus). Burst
+    credits throttle sustained load, so it carries mid-pack concurrency (6)
+    with the slowest per-request service of the three (1.6s). Directional
+    estimate, not a benchmark.
     """
     return _preset(
         AppWorkerConfig,
         name=name or "azure-worker",
-        max_capacity=8,
-        service_time=1.5,
+        max_capacity=6,
+        service_time=1.6,
         cost_per_hour=0.08,
     )
 
@@ -197,14 +208,15 @@ def azure_app_worker(name: str | None = None) -> AppWorkerConfig:
 def azure_cache(name: str | None = None) -> CacheConfig:
     """Azure Cache for Redis, Basic C1 tier (1 GiB, eastus class).
 
-    ~$0.033/h at a typical 85% read hit rate. Directional estimate, not a
-    benchmark.
+    ~$0.033/h at a typical 85% read hit rate. The 1 GiB tier is smaller than
+    cache.t3.small, so it carries fewer concurrent lookups (300) with higher
+    per-request contention (0.08s). Directional estimate, not a benchmark.
     """
     return _preset(
         CacheConfig,
         name=name or "azure-cache",
-        max_capacity=400,
-        service_time=0.05,
+        max_capacity=300,
+        service_time=0.08,
         cost_per_hour=0.03,
         hit_rate=0.85,
     )
@@ -213,13 +225,15 @@ def azure_cache(name: str | None = None) -> CacheConfig:
 def azure_sql_small(name: str | None = None) -> DatabaseConfig:
     """Azure SQL Database, Basic S0 tier (eastus class).
 
-    ~$0.04-0.05/h. Directional estimate, not a benchmark.
+    ~$0.04-0.05/h. S0's hard 10-DTU transaction ceiling makes per-query
+    service the slowest of the three (3.5s), though 4 GiB RAM keeps
+    concurrency mid-pack (8). Directional estimate, not a benchmark.
     """
     return _preset(
         DatabaseConfig,
         name=name or "azure-sql",
-        max_capacity=10,
-        service_time=3.0,
+        max_capacity=8,
+        service_time=3.5,
         cost_per_hour=0.05,
     )
 
@@ -233,14 +247,14 @@ def gcp_lb(name: str | None = None) -> LoadBalancerConfig:
     """Google Cloud external HTTP(S) load balancer, small tier.
 
     ~$0.021/h for the forwarding rule + backend, plus data-processing fees;
-    ``cost_per_hour=0.03`` is a small-LB ballpark. Directional estimate, not
-    a benchmark.
+    ``cost_per_hour=0.03`` is a small-LB ballpark. The lightest per-request
+    processing of the three (0.15s). Directional estimate, not a benchmark.
     """
     return _preset(
         LoadBalancerConfig,
         name=name or "gcp-lb",
         max_capacity=200,
-        service_time=0.2,
+        service_time=0.15,
         cost_per_hour=0.03,
     )
 
@@ -248,13 +262,15 @@ def gcp_lb(name: str | None = None) -> LoadBalancerConfig:
 def gcp_app_worker(name: str | None = None) -> AppWorkerConfig:
     """Google Compute Engine app worker, e2-small class (us-central1).
 
-    e2-small is 2 vCPU + 2 GiB; cores bill ~$0.025/h each plus RAM, so
-    ``cost_per_hour=0.06`` per slot. Directional estimate, not a benchmark.
+    e2-small is 2 *shared* vCPU + 2 GiB; cores bill ~$0.025/h each plus RAM,
+    so ``cost_per_hour=0.06`` per slot. Shared vCPUs mean the fewest
+    concurrent slots of the three small tiers (4). Directional estimate, not
+    a benchmark.
     """
     return _preset(
         AppWorkerConfig,
         name=name or "gcp-worker",
-        max_capacity=8,
+        max_capacity=4,
         service_time=1.5,
         cost_per_hour=0.06,
     )
@@ -263,14 +279,15 @@ def gcp_app_worker(name: str | None = None) -> AppWorkerConfig:
 def gcp_memorystore(name: str | None = None) -> CacheConfig:
     """Cloud Memorystore for Redis, Basic 256 MB tier (us-central1 class).
 
-    ~$0.034/h at a typical 85% read hit rate. Directional estimate, not a
-    benchmark.
+    ~$0.034/h at a typical 85% read hit rate. The smallest of the three small
+    cache tiers (256 MB), so it carries the fewest concurrent lookups (150)
+    with the most contention (0.06s). Directional estimate, not a benchmark.
     """
     return _preset(
         CacheConfig,
         name=name or "gcp-memorystore",
-        max_capacity=400,
-        service_time=0.05,
+        max_capacity=150,
+        service_time=0.06,
         cost_per_hour=0.035,
         hit_rate=0.85,
     )
@@ -279,12 +296,15 @@ def gcp_memorystore(name: str | None = None) -> CacheConfig:
 def gcp_cloud_sql_small(name: str | None = None) -> DatabaseConfig:
     """Cloud SQL for PostgreSQL, micro/Basic tier (us-central1 class).
 
-    db-f1-micro-class (~$0.05/h). Directional estimate, not a benchmark.
+    db-f1-micro-class (0.25 shared vCPU, 0.6 GiB, ~$0.05/h). The smallest of
+    the three small DB tiers, so it carries the fewest concurrent queries
+    (6); per-query service is mid-pack (3.0s). Directional estimate, not a
+    benchmark.
     """
     return _preset(
         DatabaseConfig,
         name=name or "gcp-cloud-sql",
-        max_capacity=10,
+        max_capacity=6,
         service_time=3.0,
         cost_per_hour=0.05,
     )
