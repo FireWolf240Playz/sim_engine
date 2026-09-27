@@ -45,6 +45,10 @@ sweep + knee) lives in :mod:`sim_core.compare`, exposed on the CLI as
 Named incident playbooks (``db_failover``, ``cache_eviction_storm``, ...) live
 in :mod:`sim_core.playbooks`, exposed on the CLI as ``eleven run ... --playbook
 NAME`` and ``eleven playbooks list``.
+
+The deterministic architecture score, cost grade, and steady-state cost
+extrapolation live in :mod:`sim_core.score` (pure functions over a
+``summary()`` dict) and are surfaced in every summary automatically.
 """
 
 from __future__ import annotations
@@ -70,6 +74,14 @@ from sim_core.config import (
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
 from sim_core.playbooks import PLAYBOOKS, Playbook, get_playbook, list_playbooks
+from sim_core.score import (
+    cost_extrapolation,
+    cost_grade,
+    cost_per_completed_request,
+    resilience_score,
+    score_color,
+    score_headline,
+)
 from sim_core.topology import Component, Topology
 
 __version__ = "0.1.0"
@@ -103,6 +115,13 @@ __all__ = [
     "PLAYBOOKS",
     "get_playbook",
     "list_playbooks",
+    # Architecture score / cost grade / extrapolation
+    "resilience_score",
+    "cost_grade",
+    "cost_extrapolation",
+    "cost_per_completed_request",
+    "score_headline",
+    "score_color",
     # Topology
     "Component",
     "Topology",

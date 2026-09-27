@@ -55,7 +55,7 @@ class CloudSimulator:
         # the arrival process consumes, confounding any A/B comparison.)
         self._arrival_rng, self.rng = np.random.default_rng(config.seed).spawn(2)
         self.topology = Topology(self.env, config.topology)
-        self.collector = MetricsCollector(self.topology)
+        self.collector = MetricsCollector(self.topology, sla_target=config.sla_target)
         self._req_counter = 0
 
     # -- request serving ---------------------------------------------------

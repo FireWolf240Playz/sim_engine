@@ -12,6 +12,12 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from sim_core.score import (
+    cost_extrapolation,
+    cost_grade,
+    cost_per_completed_request,
+    resilience_score,
+)
 from sim_core.topology import Topology
 
 
@@ -43,14 +49,32 @@ class UtilizationSample:
 class MetricsCollector:
     """Accumulates request outcomes and periodic utilisation samples."""
 
-    def __init__(self, topology: Topology) -> None:
+    def __init__(
+        self,
+        topology: Topology,
+        sla_target: Optional[float] = None,
+    ) -> None:
         self._topology = topology
+        #: SLA target (seconds) from the config, surfaced in ``summary()`` so
+        #: the p95-vs-SLA headroom term of the resilience score can be
+        #: computed from the summary dict alone (see :mod:`sim_core.score`).
+        self._sla_target = sla_target
         self.requests: List[RequestRecord] = []
         self.utilization: List[UtilizationSample] = []
         self.retry_counts: Dict[str, int] = {}
         self.cost_by_component: Dict[str, float] = {}
+        #: Provisioned (traffic-independent) portion of the total bill, per
+        #: component: ``cost_per_hour * capacity * dt_hours``. The remainder
+        #: (total - base) is the *metered* part billed on ``in_use + queue``,
+        #: i.e. the load/chaos-driven cost. Split for the steady-state vs
+        #: under-load headline in ``summary()``.
+        self.cost_base_by_component: Dict[str, float] = {}
         self.sizing: Dict[str, Dict[str, Any]] = {}
         self._last_sample_time: Optional[float] = None
+        #: Run horizon captured by :meth:`settle_cost`; used by
+        #: :func:`sim_core.score.cost_extrapolation` for the steady-state
+        #: hour/month/year projection in ``summary()``.
+        self._run_duration: Optional[float] = None
 
     # -- recording ---------------------------------------------------------
     def record_request(self, record: RequestRecord) -> None:
@@ -103,7 +127,9 @@ class MetricsCollector:
 
         Two-part billing, mirroring how real services price (instance-hour
         base + metered usage): each component accrues
-        ``cost_per_hour * (max_capacity + in_use + queue_length) * dt``.
+        ``cost_per_hour * (max_capacity + in_use + queue_length) * dt_hours``,
+        where ``dt_hours = dt / 3600`` because ``cost_per_hour`` is priced per
+        *hour* while simulation time is in *seconds*.
         The ``max_capacity`` term is the *provisioned* base - you pay for the
         slots you sized whether they are busy or not (oversizing therefore
         shows up as waste); the ``in_use + queue`` term meters the active
@@ -113,17 +139,28 @@ class MetricsCollector:
         """
         if self._last_sample_time is None:
             self._last_sample_time = env_now
+            if env_now > 0.0:
+                self._run_duration = env_now
             return
         dt = env_now - self._last_sample_time
         if dt <= 0.0:
             return
+        if env_now > 0.0:
+            self._run_duration = max(self._run_duration or 0.0, env_now)
         for comp in self._topology.components:
             rate = comp.config.cost_per_hour
             if rate <= 0.0:
                 continue
             billed_slots = comp.capacity + comp.in_use + comp.queue_length
             self.cost_by_component[comp.name] = (
-                self.cost_by_component.get(comp.name, 0.0) + rate * billed_slots * dt
+                self.cost_by_component.get(comp.name, 0.0)
+                + rate * billed_slots * (dt / 3600.0)  # rate is $/hour, dt is in seconds
+            )
+            # Base (provisioned) part: the slots you sized, billed whether or
+            # not they are busy. Metered part = total - base, implicitly.
+            self.cost_base_by_component[comp.name] = (
+                self.cost_base_by_component.get(comp.name, 0.0)
+                + rate * comp.capacity * (dt / 3600.0)
             )
         self._last_sample_time = env_now
 
@@ -169,10 +206,28 @@ class MetricsCollector:
             }
 
     def summary(self) -> Dict[str, Any]:
-        """Headline metrics over all completed requests."""
+        """Headline metrics over all completed requests.
+
+        Beyond the raw metrics, the summary carries the Phase 2 scoring
+        block (see :mod:`sim_core.score` for the documented formulas):
+
+        - ``sla_target`` — the configured SLA (context for the headroom term
+          and for consumers of this dict).
+        - ``cost_per_completed_request`` — unit cost of a successful request.
+        - ``resilience_score`` — deterministic 0..100 resilience number.
+        - ``cost_grade`` — 'A'..'F' right-sizing / cost-efficiency grade.
+        - ``cost_extrapolation`` — ``{hour, month, year}`` steady-state
+          projection ("same load sustained 24/7"), or ``None`` when the run
+          duration is unknown or no rates are configured.
+
+        All of it is derived purely from the metrics accumulated by this
+        collector — no extra simulation.
+        """
         self._compute_sizing()
+        total_cost = sum(self.cost_by_component.values())
+
         if not self.requests:
-            return {
+            result: Dict[str, Any] = {
                 "requests": 0,
                 "completion_rate": None,
                 "failed_requests": 0,
@@ -183,37 +238,64 @@ class MetricsCollector:
                 "p99_latency": None,
                 "cache_hit_rate": None,
                 "total_retries": 0,
-                "total_cost": sum(self.cost_by_component.values()),
+                "total_cost": total_cost,
+                "cost_breakdown_by_component": dict(self.cost_by_component),
+                "component_sizing": dict(self.sizing),
+            }
+        else:
+            latencies = np.array([r.latency for r in self.requests], dtype=float)
+            n = len(self.requests)
+            completed = sum(1 for r in self.requests if r.success)
+            sla_ok = sum(1 for r in self.requests if r.sla_met)
+            cache_requests = [r for r in self.requests if r.cache_hit is not None]
+            cache_hit_rate = (
+                sum(1 for r in cache_requests if r.cache_hit) / len(cache_requests)
+                if cache_requests
+                else None
+            )
+            result = {
+                "requests": n,
+                "completion_rate": completed / n,
+                "failed_requests": n - completed,
+                "sla_compliance": sla_ok / n,
+                "avg_latency": float(np.mean(latencies)),
+                "p50_latency": float(np.percentile(latencies, 50)),
+                "p95_latency": float(np.percentile(latencies, 95)),
+                "p99_latency": float(np.percentile(latencies, 99)),
+                "cache_hit_rate": cache_hit_rate,
+                "total_retries": self.total_retries,
+                "total_cost": total_cost,
                 "cost_breakdown_by_component": dict(self.cost_by_component),
                 "component_sizing": dict(self.sizing),
             }
 
-        latencies = np.array([r.latency for r in self.requests], dtype=float)
-        n = len(self.requests)
-        completed = sum(1 for r in self.requests if r.success)
-        sla_ok = sum(1 for r in self.requests if r.sla_met)
-        cache_requests = [r for r in self.requests if r.cache_hit is not None]
-        cache_hit_rate = (
-            sum(1 for r in cache_requests if r.cache_hit) / len(cache_requests)
-            if cache_requests
+        # -- Phase 2 scoring block (pure functions, deterministic) ---------
+        result["sla_target"] = self._sla_target
+        result["cost_per_completed_request"] = cost_per_completed_request(result)
+        result["resilience_score"] = resilience_score(result)
+        result["cost_grade"] = cost_grade(result)
+
+        # Cost split: provisioned base (traffic-independent) vs metered
+        # (in_use + queue, load/chaos-driven). The two always sum to total.
+        cost_base = sum(self.cost_base_by_component.values())
+        result["cost_base"] = cost_base
+        result["cost_metered"] = max(0.0, total_cost - cost_base)
+
+        duration = self._run_duration
+        if duration is None and self.utilization:
+            duration = max(sample.time for sample in self.utilization)
+        result["cost_extrapolation"] = (
+            cost_extrapolation(total_cost, duration) if duration and duration > 0.0 else None
+        )
+        #: "What the same bill looks like with none of the load/chaos on top"
+        #: - the pure provisioned base, projected the same way (24/7 label
+        #: applies equally). None when there is no base to project.
+        result["steady_state_cost_extrapolation"] = (
+            cost_extrapolation(cost_base, duration)
+            if duration and duration > 0.0 and cost_base > 0.0
             else None
         )
-
-        return {
-            "requests": n,
-            "completion_rate": completed / n,
-            "failed_requests": n - completed,
-            "sla_compliance": sla_ok / n,
-            "avg_latency": float(np.mean(latencies)),
-            "p50_latency": float(np.percentile(latencies, 50)),
-            "p95_latency": float(np.percentile(latencies, 95)),
-            "p99_latency": float(np.percentile(latencies, 99)),
-            "cache_hit_rate": cache_hit_rate,
-            "total_retries": self.total_retries,
-            "total_cost": sum(self.cost_by_component.values()),
-            "cost_breakdown_by_component": dict(self.cost_by_component),
-            "component_sizing": dict(self.sizing),
-        }
+        return result
 
     def requests_df(self) -> pd.DataFrame:
         """One row per completed request, with per-component latency breakdowns."""

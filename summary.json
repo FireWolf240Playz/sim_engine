@@ -1,43 +1,49 @@
 {
-  "requests": 233,
+  "requests": 230,
   "completion_rate": 1.0,
   "failed_requests": 0,
-  "sla_compliance": 0.9785407725321889,
-  "avg_latency": 2.801517477289725,
-  "p50_latency": 1.596098910740416,
-  "p95_latency": 10.07625483708244,
-  "p99_latency": 17.545803373941236,
-  "cache_hit_rate": 0.7909604519774012,
+  "sla_compliance": 0.9652173913043478,
+  "avg_latency": 3.1065278699753223,
+  "p50_latency": 1.7523087580553955,
+  "p95_latency": 14.035798163511743,
+  "p99_latency": 20.94038621593692,
+  "cache_hit_rate": 0.7821229050279329,
   "total_retries": 0,
-  "total_cost": 0,
-  "cost_breakdown_by_component": {},
+  "total_cost": 0.058509444444444454,
+  "cost_breakdown_by_component": {
+    "alb": 0.009799111111111113,
+    "worker-a": 0.010746666666666667,
+    "worker-b": 0.011255111111111108,
+    "redis": 0.004305555555555555,
+    "postgres": 0.022403000000000013
+  },
   "component_sizing": {
     "alb": {
-      "mean_utilization": 0.05375,
-      "p95_utilization": 0.22187499999999982,
+      "mean_utilization": 0.05875,
+      "p95_utilization": 0.2843749999999998,
       "p95_queue": 0.0,
       "recommended_capacity": 6,
       "status": "oversized"
     },
     "worker-a": {
-      "mean_utilization": 0.16,
+      "mean_utilization": 0.1625,
       "p95_utilization": 0.5,
       "p95_queue": 0.0,
-      "recommended_capacity": 7,
+      "recommended_capacity": 6,
       "status": "oversized"
     },
     "worker-b": {
-      "mean_utilization": 0.2225,
-      "p95_utilization": 0.6374999999999993,
+      "mean_utilization": 0.215,
+      "p95_utilization": 0.5,
       "p95_queue": 0.0,
-      "recommended_capacity": 8,
+      "recommended_capacity": 6,
       "status": "oversized"
     },
     "redis": {
-      "mean_utilization": 0.03833333333333333,
-      "p95_utilization": 0.21249999999999974,
+      "mean_utilization": 0.03166666666666666,
+      "p95_utilization": 0.16666666666666666,
       "p95_queue": 0.0,
-      "recommended_capacity": 4,
+      "recommended_capacity": 2,
       "status": "oversized"
     },
     "postgres": {
@@ -47,5 +53,21 @@
       "recommended_capacity": 13,
       "status": "oversized"
     }
+  },
+  "sla_target": 15.0,
+  "cost_per_completed_request": 0.0002543888888888889,
+  "resilience_score": 97.9,
+  "cost_grade": "D",
+  "cost_base": 0.04533022222222223,
+  "cost_metered": 0.013179222222222224,
+  "cost_extrapolation": {
+    "hour": 2.1063400000000003,
+    "month": 1516.5648000000003,
+    "year": 18451.5384
+  },
+  "steady_state_cost_extrapolation": {
+    "hour": 1.6318880000000002,
+    "month": 1174.95936,
+    "year": 14295.338880000001
   }
 }

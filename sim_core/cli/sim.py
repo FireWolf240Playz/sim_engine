@@ -24,6 +24,7 @@ from sim_core import (
     TrafficPattern,
     compare,
     render_report,
+    score_headline,
 )
 from sim_core.playbooks import get_playbook, list_playbooks
 from sim_core.viz import render_comparison
@@ -123,6 +124,15 @@ def _format_summary(summary: Dict[str, Any]) -> str:
     lines = [
         "Eleven - pre-deployment cloud-resilience report",
         "=" * 52,
+    ]
+    if "resilience_score" in summary or "cost_grade" in summary:
+        lines.append(score_headline(summary))
+        lines.append(
+            "(score/grade: deterministic, from this run's metrics; "
+            "cost assumes the same load sustained 24/7)"
+        )
+        lines.append("=" * 52)
+    lines += [
         f"Requests served .......... {summary['requests']}",
         f"Failed requests .......... {summary['failed_requests']}",
         f"Timeout retries .......... {summary['total_retries']}",

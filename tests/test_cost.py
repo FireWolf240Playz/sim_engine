@@ -11,7 +11,9 @@ All tests are deterministic (fixed seed). The chaos comparison uses
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
+
+import pytest
 
 from sim_core import (
     AppWorkerConfig,
@@ -19,7 +21,9 @@ from sim_core import (
     ChaosEvent,
     ChaosEventType,
     CloudSimulator,
+    ComponentConfig,
     DatabaseConfig,
+    GraphTopologyConfig,
     LoadBalancerConfig,
     SimulationConfig,
     TopologyConfig,
@@ -69,6 +73,65 @@ def test_cost_accumulates_and_breaks_down_by_component() -> None:
     assert set(breakdown) == {"lb", "worker", "redis", "db"}
     assert all(value > 0.0 for value in breakdown.values())
     assert abs(sum(breakdown.values()) - summary["total_cost"]) < 1e-9
+
+
+def test_cost_units_are_per_hour() -> None:
+    """Regression: ``cost_per_hour`` is a per-HOUR rate, billed over seconds.
+
+    Re-derives the expected total independently from the unit contract —
+    ``rate * (capacity + in_use + queue) * dt / 3600`` per interval, using
+    the recorded utilisation samples plus the final settle interval at the
+    horizon — and asserts the engine's total matches. Also pins a plain
+    order-of-magnitude bound: 3 slots at $36/hr for a 12 s run must cost
+    well under $3 (with the old seconds-as-hours bug it was ~$1300).
+    """
+    sim = CloudSimulator(
+        SimulationConfig(
+            seed=11,
+            duration=12.0,
+            metrics_interval=2.0,
+            topology=GraphTopologyConfig(
+                nodes=[
+                    ComponentConfig(
+                        name="solo", max_capacity=3, service_time=0.2, cost_per_hour=36.0
+                    )
+                ]
+            ),
+            traffic=TrafficPattern(base_rps=1.0, duration=12.0),
+            chaos=[],
+        )
+    )
+    summary = sim.run()
+
+    rate = 36.0
+    expected = 0.0
+    prev_time: Optional[float] = None
+    for sample in sim.collector.utilization:
+        if prev_time is not None:
+            m = sample.per_component["solo"]
+            expected += (
+                rate
+                * (m["capacity"] + m["in_use"] + m["queue_length"])
+                * (sample.time - prev_time)
+                / 3600.0
+            )
+        prev_time = sample.time
+    # settle_cost(horizon) bills the final interval at the live state at t=D
+    # (zero-width no-op when the t=D tick already ran).
+    comp = sim.topology.components[0]
+    if prev_time is not None and 12.0 > prev_time:
+        expected += (
+            rate
+            * (comp.capacity + comp.in_use + comp.queue_length)
+            * (12.0 - prev_time)
+            / 3600.0
+        )
+
+    assert summary["total_cost"] == pytest.approx(expected, rel=1e-9)
+    # 3 slots at $36/hr for 12 s ≈ $0.36 at zero load; even fully queued
+    # (in_use + queue ≤ 12 arrivals) stays far below $3. The 3600× bug
+    # would put this near $1300.
+    assert summary["total_cost"] < 3.0
 
 
 def test_cost_defaults_to_zero_and_is_absent_from_breakdown() -> None:
@@ -148,8 +211,8 @@ def test_idle_capacity_is_still_billed() -> None:
     """Near-zero traffic still accrues the provisioned base (two-part billing).
 
     With ``cost_per_hour=10`` and capacities 10+4+8+3, the 30 s provisioned
-    base alone is 10 * 25 * 30 = $7500 regardless of traffic; a couple of
-    stray requests add only a few dollars on top.
+    base alone is 10 $/hr * 25 slots * 30/3600 hr = $2.083 regardless of
+    traffic; a couple of stray requests add only a few cents on top.
     """
     config = _config(10.0, []).model_copy(
         update={"traffic": TrafficPattern(base_rps=0.1, duration=5.0)}
@@ -158,7 +221,12 @@ def test_idle_capacity_is_still_billed() -> None:
     summary = CloudSimulator(config).run()
 
     assert summary["requests"] <= 2
-    assert 7400.0 < summary["total_cost"] < 8000.0
+    # The base is exact: capacity is constant (no chaos) and the billed
+    # intervals tile [0, 30 s], so cost >= rate * slots * hours, with only
+    # the in_use/queue metering on top.
+    base = 10.0 * 25 * 30.0 / 3600.0
+    assert summary["total_cost"] == pytest.approx(base, rel=0.25)
+    assert summary["total_cost"] >= base
 
 
 def test_chaos_run_costs_more_than_healthy_run() -> None:

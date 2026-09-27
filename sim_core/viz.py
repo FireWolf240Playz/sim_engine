@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Sequence, Union
 import numpy as np
 
 from sim_core.metrics import MetricsCollector
+from sim_core.score import score_color
 
 
 def render_report(
@@ -90,6 +91,26 @@ def render_report(
         f"Eleven resilience report - {summary['requests']} requests, SLA {sla_text}",
         fontsize=13,
     )
+    score = summary.get("resilience_score")
+    if score is not None:
+        grade = summary.get("cost_grade") or "n/a"
+        fig.text(
+            0.995,
+            0.995,
+            f"Resilience {score:.0f}/100  |  Cost {grade}",
+            transform=fig.transFigure,
+            ha="right",
+            va="top",
+            fontsize=12,
+            fontweight="bold",
+            color="white",
+            bbox=dict(
+                boxstyle="round,pad=0.5",
+                facecolor=score_color(score),
+                edgecolor="none",
+                alpha=0.95,
+            ),
+        )
     fig.tight_layout(rect=(0, 0, 1, 0.97))
 
     out = Path(output_path)

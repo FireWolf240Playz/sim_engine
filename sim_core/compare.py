@@ -79,11 +79,13 @@ class RunResult:
     parameter_value: Optional[float] = None
 
 
-def _coerce(value: Any) -> Any:
+def coerce_value(value: Any) -> Any:
     """Coerce CLI-style strings to numbers; pass everything else through.
 
     ``"20" -> 20``, ``"2.5" -> 2.5``, ``"abc"`` stays a string (Pydantic
-    then raises a clear validation error if the field rejects it).
+    then raises a clear validation error if the field rejects it). Public
+    so the API layer (and any other caller) can reuse the same coercion
+    rules instead of duplicating them.
     """
     if isinstance(value, str):
         text = value.strip()
@@ -93,6 +95,10 @@ def _coerce(value: Any) -> Any:
             except ValueError:
                 pass
     return value
+
+
+#: Private alias kept for this module's internal call sites.
+_coerce = coerce_value
 
 
 def run_one(

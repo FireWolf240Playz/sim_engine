@@ -163,6 +163,7 @@ sim_core/
 ├── chaos.py         # Real failure injection (capacity / latency / cache)
 ├── playbooks.py     # Named incident playbooks (db failover, latency spike, ...)
 ├── metrics.py       # RequestRecord, utilisation samples, pandas aggregation
+├── score.py         # Deterministic resilience score + cost grade + cost extrapolation
 ├── engine.py        # CloudSimulator: wires everything into a simpy.Environment
 ├── compare.py       # Compare-runs engine: multi-cloud / what-if / sweep + knee
 ├── presets.py       # Provider-calibrated component presets (aws/azure/gcp)
@@ -219,6 +220,41 @@ python -m sim_core demo --playbook cache_eviction_storm
 The playbook's chaos events are *appended* to whatever chaos the config already defines (never replaced), and the first injection lands ~25% into the run (floored at 5 s) so the incident always fires inside the horizon. All four incidents mutate **live** SimPy state through the same apply/release machinery as raw chaos events, so overlapping windows on the same node compose instead of clobbering each other.
 
 As a library: `from sim_core import get_playbook` — `config = get_playbook("db_failover").apply(config)`.
+
+## Architecture score
+
+Every run ends with a one-liner a non-technical person reads in two seconds:
+
+```
+Resilience 98/100 | Cost grade D | $1,517/mo (steady $1,175/mo) | $18.5k/yr
+```
+
+- **Resilience score (0–100)** — deterministic weighted blend of the run's own metrics: SLA compliance (60 pts, dominant) + completion rate (40 pts), minus penalties for hard failures (up to 30), retry pressure (up to 10), and p95 latency running past the SLA target (up to 10). Same summary ⇒ same score, always.
+- **Cost grade (A–F)** — 70% right-sizing quality (share of `right_sized` vs `oversized`/`undersized` verdicts — undersized scores worst, it is a reliability risk) + 30% cost efficiency (share of spend sitting on oversized components). Bands: A ≥ 0.90, B ≥ 0.75, C ≥ 0.55, D ≥ 0.35, else F.
+- **Cost extrapolation** — linear steady-state projection of the sampled run to `{hour, month, year}`, honestly labeled: *assumes the same load sustained 24/7*. A planning number, not a bill.
+- **Cost split (steady vs under-load)** — the bill is split into the *provisioned base* (the slots you sized, billed whether busy or not: `cost_base`) and the *metered* part (billed on active + queued demand, driven by traffic, spikes and chaos: `cost_metered`). The headline shows both: the monthly under-load bill and, in parentheses, the steady base-only bill (`steady_state_cost_extrapolation`) — the answer to "is this expensive because of the chaos test, or because I sized it big?"
+
+All three are computed in `sim_core/score.py` — pure functions over the `summary()` dict, no new simulation and no new dependencies — so they surface automatically in the JSON report and flow into the API (below) and the frontend for free. The PNG report carries a color-coded score badge (green ≥ 75, amber ≥ 50, red below).
+
+As a library: `from sim_core import resilience_score, cost_grade, cost_extrapolation, score_headline`.
+
+## API (FastAPI)
+
+The same engine exposed as a stateless HTTP service — config in, results out. No database, no sessions: every request carries a full `SimulationConfig` and gets the full summary (score, grade, cost split, extrapolations) back, so results are reproducible purely from the request body.
+
+```bash
+uvicorn api.main:app --reload   # from the repo root; interactive docs at http://127.0.0.1:8000/docs
+```
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /simulate` | Full `SimulationConfig` + optional `playbook` + optional `include_report_png` → the complete `summary` dict, plus the rendered report as base64 when asked. Unknown playbook → 404, bad config → 422. |
+| `POST /compare` | `multi-cloud` (baseline + AWS/Azure/GCP preset calibration), `what-if` (`set: ["path=value", ...]`), or `sweep` (`param` + `values`, returns the right-sizing `knee`). Returns the baseline-relative diff. |
+| `GET /playbooks` | The four named incidents (name + description) — feeds the incident picker. |
+| `GET /presets` | The 12 provider × role presets as plain JSON — realistic starting points per component. |
+| `GET /health` | Liveness + engine version. |
+
+CORS is currently permissive (`*`) so the Phase 5 Next.js frontend can call it from any local origin; tighten to the real frontend origin once it has one. Tests: `tests/test_api.py` (FastAPI `TestClient`, covers every endpoint, both happy paths and the error mappings).
 
 ## Reproducibility
 
