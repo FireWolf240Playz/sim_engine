@@ -22,18 +22,31 @@ class SimulateRequest(BaseModel):
     ``config.chaos`` (see :mod:`sim_core.playbooks`); an
     unknown name is a 404. ``include_report_png`` returns the rendered
     report as base64 so the frontend can display it without extra calls.
+
+    ``include_timeseries`` returns the per-tick timeline (p50/p95 latency
+    windows + per-component utilisation) so the frontend can draw the
+    latency-vs-chaos timeline from one response.
     """
 
     config: SimulationConfig
     playbook: str | None = None
     include_report_png: bool = False
+    include_timeseries: bool = False
 
 
 class SimulateResponse(BaseModel):
-    """The run's full summary dict plus (optionally) the report PNG."""
+    """The run's full summary dict plus (optionally) the report PNG.
+
+    ``chaos`` is the *effective* chaos schedule — the config's own events
+    plus any playbook events appended server-side — so a frontend can derive
+    chaos windows from the response alone. ``timeseries`` is present only
+    when ``include_timeseries`` was requested.
+    """
 
     summary: dict[str, Any]
     report_png_b64: str | None = None
+    chaos: list[dict[str, Any]] = Field(default_factory=list)
+    timeseries: list[dict[str, Any]] | None = None
 
 
 class CompareRequest(BaseModel):

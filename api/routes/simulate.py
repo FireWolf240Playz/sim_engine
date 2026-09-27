@@ -58,7 +58,16 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
             out_path = render_report_to_temp(simulator.collector, tmp)
             report_png_b64 = base64.b64encode(Path(out_path).read_bytes()).decode("ascii")
 
-    return {"summary": summary, "report_png_b64": report_png_b64}
+    timeseries: list[dict[str, Any]] | None = None
+    if payload.include_timeseries:
+        timeseries = simulator.collector.timeseries()
+
+    return {
+        "summary": summary,
+        "report_png_b64": report_png_b64,
+        "chaos": [event.model_dump(mode="json") for event in config.chaos],
+        "timeseries": timeseries,
+    }
 
 
 def render_report_to_temp(collector: Any, tmp_dir: str) -> Path:

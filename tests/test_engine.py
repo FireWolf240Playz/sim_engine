@@ -21,7 +21,10 @@ from sim_core import (
     ChaosEvent,
     ChaosEventType,
     CloudSimulator,
+    ComponentConfig,
     DatabaseConfig,
+    Edge,
+    GraphTopologyConfig,
     LoadBalancerConfig,
     SimulationConfig,
     Topology,
@@ -137,6 +140,49 @@ def test_no_cache_path_still_runs() -> None:
 
     assert summary["requests"] > 0
     assert summary["cache_hit_rate"] is None
+
+
+def test_downstream_node_is_actually_served() -> None:
+    """worker→db chain: the db is genuinely on the request path.
+
+    Regression guard for the "orphan node" trap: a db listed in the topology
+    but never linked by an edge serves zero traffic and its utilisation
+    stays 0%. With the edge, steady-state demand is ≈ base_rps × service_time
+    = 1.5 × 2.5 = 3.75 of 4 slots, so the db must read clearly loaded.
+    """
+    config = SimulationConfig(
+        seed=42,
+        duration=60.0,
+        metrics_interval=2.0,
+        topology=GraphTopologyConfig(
+            nodes=[
+                ComponentConfig(name="worker", role="worker", max_capacity=6, service_time=1.2),
+                ComponentConfig(name="db", role="database", max_capacity=4, service_time=2.5),
+            ],
+            edges=[Edge(source="worker", target="db", probability=1.0)],
+        ),
+        traffic=TrafficPattern(base_rps=1.5, duration=60.0),
+    )
+    summary = CloudSimulator(config).run()
+    db = summary["component_sizing"]["db"]
+    assert db["mean_utilization"] > 0.5  # ≈ 3.75/4 in steady state
+    assert db["status"] in {"right_sized", "undersized"}
+
+
+def test_unreachable_node_rejected_at_config_validation() -> None:
+    """A node no request can reach (missing edge) fails fast with a clear message."""
+    with pytest.raises(ValidationError, match="unreachable"):
+        SimulationConfig(
+            seed=1,
+            duration=10.0,
+            topology=GraphTopologyConfig(
+                nodes=[
+                    ComponentConfig(name="worker", role="worker", max_capacity=6, service_time=1.0),
+                    ComponentConfig(name="db", role="database", max_capacity=4, service_time=2.0),
+                ]
+            ),
+            traffic=TrafficPattern(base_rps=1.0, duration=10.0),
+        )
 
 
 def test_config_validation_rejects_bad_capacity() -> None:

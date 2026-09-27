@@ -1,26 +1,71 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+/*
+  Eleven design tokens — dual theme.
+
+  Light (default) speaks the clean SaaS-dashboard language: near-white
+  canvas, white cards with hairline borders and a whisper of shadow,
+  violet as the single interactive accent, severity scale tuned for
+  light backgrounds.
+
+  Dark keeps the ops-console identity: deep navy canvas, brighter
+  severity values, the same violet accent lifted for contrast.
+
+  Every utility (bg-surface-1, text-ink, border-line, shadow-card,
+  ...) resolves to these CSS variables, so the
+  `html[data-theme="dark"]` block below re-skins the whole app —
+  components never hardcode a theme color.
+*/
+@theme {
+  --color-surface-0: #f6f7fa; /* canvas */
+  --color-surface-1: #ffffff; /* cards / panels / sidebar */
+  --color-surface-2: #edeff5; /* hover / segmented track / raised */
+  --color-line: #e4e7ee; /* hairlines, table rules */
+  --color-ink: #171a21; /* primary text */
+  --color-ink-dim: #667085; /* secondary text */
+  --color-accent: #6d5df0; /* interactive: RUN, active, focus */
+  --color-accent-2: #5a49e6; /* accent hover */
+  --color-accent-soft: #efeffd; /* active pill / icon-chip wash */
+  --color-sev-ok: #178a50; /* healthy / right-sized */
+  --color-sev-ok-soft: #e7f5ee;
+  --color-sev-warn: #b26209; /* degraded / oversized */
+  --color-sev-warn-soft: #fdf1de;
+  --color-sev-crit: #d92d20; /* failing / undersized / chaos */
+  --color-sev-crit-soft: #fdeceb;
+
+  --shadow-card:
+    0 1px 2px rgb(23 26 33 / 0.04), 0 1px 3px rgb(23 26 33 / 0.06);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Dark theme: override the same variables. Author CSS outside
+   @layer theme wins over the @theme declarations, and every
+   utility reads the variable at use-time, so one attribute on
+   <html> re-themes the entire app. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --color-surface-0: #0e1420;
+  --color-surface-1: #151d2e;
+  --color-surface-2: #1b2436;
+  --color-line: #26334d;
+  --color-ink: #e8edf5;
+  --color-ink-dim: #8b96ac;
+  --color-accent: #8b7bff;
+  --color-accent-2: #a296ff;
+  --color-accent-soft: #8b7bff24;
+  --color-sev-ok: #2fbf71;
+  --color-sev-ok-soft: #2fbf7126;
+  --color-sev-warn: #e8a13a;
+  --color-sev-warn-soft: #e8a13a29;
+  --color-sev-crit: #e5484d;
+  --color-sev-crit-soft: #e5484d26;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.25);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-surface-0);
+  color: var(--color-ink);
 }

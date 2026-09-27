@@ -333,6 +333,41 @@ class GraphTopologyConfig(BaseModel):
             raise ValueError(f"entry_node {self.entry_node!r} is not one of the configured nodes")
         return self
 
+    @model_validator(mode="after")
+    def _all_nodes_reachable_from_entry(self) -> GraphTopologyConfig:
+        """Fail fast when a node no request can ever reach.
+
+        A node that is listed but not linked into the path (a missing edge)
+        is served zero traffic: its utilisation stays 0, its sizing verdict
+        reads "oversized", and chaos aimed at it changes nothing observable.
+        That is a wiring mistake in practice - the same class of config
+        error as an edge referencing an unknown node - so it is rejected at
+        validation time with a message that says exactly what to fix.
+        """
+        if len(self.nodes) <= 1:
+            return self  # a single node is its own entry; nothing to reach
+        entry = self.resolve_entry_node()
+        adjacency: Dict[str, List[str]] = {node.name: [] for node in self.nodes}
+        for edge in self.edges:
+            adjacency[edge.source].append(edge.target)
+        seen: set[str] = {entry}
+        frontier = [entry]
+        while frontier:
+            for target in adjacency[frontier.pop()]:
+                if target not in seen:
+                    seen.add(target)
+                    frontier.append(target)
+        orphans = sorted({node.name for node in self.nodes} - seen)
+        if orphans:
+            raise ValueError(
+                "topology node(s) unreachable from the entry node: "
+                f"{', '.join(orphans)} - no request can ever reach them, so their "
+                "metrics, sizing, and chaos are all meaningless. Add an edge "
+                f"linking each into the request path (entry is {entry!r}) "
+                "or remove them."
+            )
+        return self
+
     def node_role(self, name: str) -> ComponentRole:
         """Role of the node called ``name`` (KeyError when unknown)."""
         for node in self.nodes:

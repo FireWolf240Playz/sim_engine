@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from api.main import create_app
 from sim_core import (
     ComponentConfig,
+    Edge,
     GraphTopologyConfig,
     SimulationConfig,
     TrafficPattern,
@@ -35,7 +36,8 @@ def client() -> TestClient:
 
 
 def _config() -> SimulationConfig:
-    """Small worker+db topology — db so the db_failover playbook has a target."""
+    """Small worker→db chain — the edge is what puts the db on the request
+    path, so the db_failover playbook genuinely degrades it."""
     return SimulationConfig(
         seed=42,
         duration=6.0,
@@ -45,7 +47,8 @@ def _config() -> SimulationConfig:
             nodes=[
                 ComponentConfig(name="worker", role="worker", max_capacity=6, service_time=1.0),
                 ComponentConfig(name="db", role="database", max_capacity=4, service_time=2.0),
-            ]
+            ],
+            edges=[Edge(source="worker", target="db", probability=1.0)],
         ),
         traffic=TrafficPattern(base_rps=1.0, duration=6.0),
         chaos=[],
@@ -144,6 +147,34 @@ def test_simulate_returns_report_png_when_asked(client: TestClient) -> None:
     assert encoded
     decoded = base64.b64decode(encoded)
     assert decoded.startswith(PNG_MAGIC)
+
+
+def test_simulate_include_timeseries(client: TestClient) -> None:
+    response = client.post("/simulate", json=_body(include_timeseries=True))
+    assert response.status_code == 200
+    payload = response.json()
+    ticks = payload["timeseries"]
+    assert isinstance(ticks, list) and ticks
+    for tick in ticks:
+        assert {"time", "p50_latency", "p95_latency", "sla_met", "per_component"} <= set(tick)
+        assert tick["per_component"]["worker"]["utilization"] >= 0.0
+    times = [tick["time"] for tick in ticks]
+    assert times == sorted(times)
+    # Flag omitted ⇒ field stays null (backward compatible shape).
+    default = client.post("/simulate", json=_body()).json()
+    assert default["timeseries"] is None
+
+
+def test_simulate_returns_effective_chaos_schedule(client: TestClient) -> None:
+    # No playbook: the config's own (empty) schedule is echoed back.
+    plain = client.post("/simulate", json=_body()).json()
+    assert plain["chaos"] == []
+    # With db_failover: the two playbook events are visible client-side.
+    play = client.post("/simulate", json=_body(playbook="db_failover")).json()
+    events = play["chaos"]
+    assert len(events) == 2
+    assert all(e["target"] == "db" for e in events)
+    assert [e["intensity"] for e in events] == [1.0, 0.5]
 
 
 # ---------------------------------------------------------------------------

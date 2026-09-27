@@ -297,6 +297,53 @@ class MetricsCollector:
         )
         return result
 
+    def timeseries(self) -> List[Dict[str, Any]]:
+        """Per-tick timeline for the frontend (pure aggregation, no simulation).
+
+        One entry per :meth:`sample_utilization` tick, in time order.
+        Latency percentiles are computed over the requests that *completed
+        inside that tick's window* — requests are recorded at completion in
+        event order, so their end-times are non-decreasing and a running
+        pointer is exact. Windows with no completed request carry ``None``
+        percentiles so a chart can gap honestly instead of drawing a fake
+        zero (mirrors the :mod:`sim_core.metrics` no-single-point rule).
+
+        Shape::
+
+            {
+              "time": 4.0,
+              "p50_latency": 1.8, "p95_latency": 3.1, "sla_met": 0.9,
+              "per_component": {"worker": {"utilization": 0.7, "queue_length": 2.0}},
+            }
+        """
+        ticks: List[Dict[str, Any]] = []
+        cursor = 0
+        for sample in self.utilization:
+            window: List[RequestRecord] = []
+            while cursor < len(self.requests) and self.requests[cursor].end <= sample.time:
+                window.append(self.requests[cursor])
+                cursor += 1
+            entry: Dict[str, Any] = {
+                "time": sample.time,
+                "p50_latency": None,
+                "p95_latency": None,
+                "sla_met": None,
+                "per_component": {
+                    name: {
+                        "utilization": metrics["utilization"],
+                        "queue_length": metrics["queue_length"],
+                    }
+                    for name, metrics in sample.per_component.items()
+                },
+            }
+            if window:
+                latencies = np.array([record.latency for record in window], dtype=float)
+                entry["p50_latency"] = float(np.percentile(latencies, 50))
+                entry["p95_latency"] = float(np.percentile(latencies, 95))
+                entry["sla_met"] = sum(1 for record in window if record.sla_met) / len(window)
+            ticks.append(entry)
+        return ticks
+
     def requests_df(self) -> pd.DataFrame:
         """One row per completed request, with per-component latency breakdowns."""
         rows: List[Dict[str, Any]] = []

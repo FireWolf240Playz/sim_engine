@@ -1,69 +1,124 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useQuery } from "@tanstack/react-query";
+import { Panel } from "@/components/Panel";
+import { IncidentPicker } from "@/components/IncidentPicker";
+import { SizingTable } from "@/core/components/SizingTable";
+import { StatCards } from "@/core/components/StatCards";
+import { TimelineChart } from "@/core/components/TimelineChart";
+import { TopologyDiagram } from "@/core/components/TopologyDiagram";
+import { api } from "@/core/api/client";
+import { DEMO_CONFIG, DEMO_META, playbookTargets } from "@/core/lib/demo";
+import { chaosWindows } from "@/core/lib/chaos";
+import { useRunState } from "@/core/state/RunStateContext";
+
+function EmptyState() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="rounded-xl border border-dashed border-line bg-surface-1/60 px-6 py-14 text-center">
+      <p className="mx-auto max-w-lg text-[15px] leading-7 text-ink">
+        No run yet. Pick an incident if you&apos;re feeling brave, or run it
+        clean first — then I&apos;ll show you exactly where this architecture
+        breaks, and what keeping it alive would cost.
+      </p>
+      <p className="mx-auto mt-3 text-xs text-ink-dim">{DEMO_META}</p>
+    </div>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <div className="rounded-xl border border-sev-crit/40 bg-sev-crit-soft px-5 py-4">
+      <p className="text-sm leading-6 text-sev-crit">{message}</p>
+      <p className="mt-2 text-xs text-ink-dim">
+        start the engine from the repo root: uvicorn api.main:app --port 8000
+      </p>
+    </div>
+  );
+}
+
+export default function HomePage() {
+  const { playbook, setPlaybook, requestRun, result, error, isPending } = useRunState();
+  const { data: playbooks } = useQuery({ queryKey: ["playbooks"], queryFn: api.playbooks });
+
+  const sizing = result?.summary.component_sizing;
+  const { names: targetNames, wholePath } = playbookTargets(
+    playbook,
+    DEMO_CONFIG.topology.nodes,
+  );
+  const context = playbook ? `under ${playbook.replace(/_/g, " ")}` : "on the clean run";
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
+        <div className="min-w-0 max-w-2xl">
+          <h1 className="text-xl font-semibold tracking-tight text-ink">
+            Stress test
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-1.5 text-sm leading-6 text-ink-dim">
+            Pick an incident, run it against the demo topology, and see
+            exactly where the architecture breaks — and what keeping it alive
+            costs — before it&apos;s real infrastructure.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <div className="flex items-center gap-3">
+          <span className="hidden font-mono text-[11px] text-ink-dim lg:inline">
+            seed 42 · 60s run
+          </span>
+          <button
+            type="button"
+            onClick={() => requestRun()}
+            disabled={isPending}
+            className="h-10 rounded-lg bg-accent px-6 text-sm font-semibold text-white shadow-card transition-colors outline-none hover:bg-accent-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            {isPending ? "Running…" : "Run"}
+          </button>
         </div>
-      </main>
+      </div>
+
+      <Panel title="Incident" aside="each one mutates live simulation state">
+        <IncidentPicker
+          value={playbook}
+          onChange={setPlaybook}
+          options={playbooks?.playbooks ?? []}
+          disabled={isPending}
+        />
+      </Panel>
+
+      {error ? <ErrorState message={error} /> : null}
+
+      <StatCards summary={result?.summary ?? null} context={context} />
+
+      {result && sizing ? (
+        <>
+          <Panel
+            title="Topology"
+            aside={playbook ? `incident targets: ${wholePath ? "whole path" : targetNames.join(", ")}` : "clean run"}
+          >
+            <TopologyDiagram
+              nodes={DEMO_CONFIG.topology.nodes}
+              edges={DEMO_CONFIG.topology.edges ?? []}
+              sizing={sizing}
+              targetNames={targetNames}
+              wholePath={wholePath}
+            />
+          </Panel>
+
+          <Panel title="Timeline" aside="latency vs chaos, one clock">
+            <TimelineChart
+              ticks={result.timeseries ?? []}
+              slaTarget={DEMO_CONFIG.sla_target}
+              windows={chaosWindows(result.chaos, DEMO_CONFIG.traffic.duration)}
+              horizon={DEMO_CONFIG.traffic.duration}
+            />
+          </Panel>
+
+          <Panel title="Sizing" aside="where the money sits">
+            <SizingTable nodes={DEMO_CONFIG.topology.nodes} sizing={sizing} />
+          </Panel>
+        </>
+      ) : (
+        !error && <EmptyState />
+      )}
     </div>
   );
 }
