@@ -26,7 +26,17 @@ from sim_core.config import (
 class Component:
     """A single live infrastructure component backed by a SimPy resource."""
 
-    __slots__ = ("config", "resource", "service_time", "hit_rate", "_base_service_time")
+    __slots__ = (
+        "config",
+        "resource",
+        "service_time",
+        "hit_rate",
+        "_base_service_time",
+        "_base_hit_rate",
+        "_active_capacity_drops",
+        "_active_latency_factors",
+        "_active_hit_rate_drops",
+    )
 
     def __init__(self, env: simpy.Environment, config: ComponentConfig) -> None:
         self.config = config
@@ -35,7 +45,12 @@ class Component:
         # Live, mutable knobs that chaos injection can change at runtime.
         self._base_service_time = config.service_time
         self.service_time = config.service_time
-        self.hit_rate = config.hit_rate if isinstance(config, CacheConfig) else 1.0
+        self._base_hit_rate = config.hit_rate if isinstance(config, CacheConfig) else 1.0
+        self.hit_rate = self._base_hit_rate
+        # Active chaos degradations per knob (see apply_*/release_* below).
+        self._active_capacity_drops: List[float] = []
+        self._active_latency_factors: List[float] = []
+        self._active_hit_rate_drops: List[float] = []
 
     # -- read-only views of the config -------------------------------------
     @property
@@ -87,13 +102,82 @@ class Component:
         self.resource._capacity = applied  # noqa: SLF001 - the public property is read-only
         return applied
 
-    def inflate_service_time(self, factor: float) -> None:
-        """Multiply the live mean service time by ``factor`` (>= 0)."""
-        self.service_time = max(0.0, self._base_service_time * factor)
+    # -- reference-counted chaos knobs (used by chaos) ----------------------
+    #
+    # Every chaos knob is reference-counted: each active window registers its
+    # intensity and the live value is always recomputed from the *configured*
+    # base plus the worst active degradation. This makes overlapping chaos
+    # windows on the same node (e.g. a 5 s full outage followed by a 30 s
+    # half-capacity window, as in the ``db_failover`` playbook) compose
+    # deterministically - whichever process resumes first, the state is the
+    # same - and a restore can never cancel another window that is still
+    # active.
 
-    def restore_service_time(self) -> None:
-        """Restore the live service time to its configured base value."""
-        self.service_time = self._base_service_time
+    def apply_capacity_drop(self, intensity: float) -> None:
+        """Register an active capacity removal and recompute the live slots.
+
+        Fewer live slots means new requests genuinely queue longer; in-flight
+        ones keep their slots until they finish, which is the realistic
+        degradation.
+        """
+        self._active_capacity_drops.append(intensity)
+        self._recompute_capacity()
+
+    def release_capacity_drop(self, intensity: float) -> None:
+        """End one capacity removal; restore base capacity when none remain."""
+        try:
+            self._active_capacity_drops.remove(intensity)
+        except ValueError:  # pragma: no cover - defensive: unbalanced release
+            return
+        self._recompute_capacity()
+
+    def _recompute_capacity(self) -> None:
+        base = self.config.max_capacity
+        worst = max(self._active_capacity_drops) if self._active_capacity_drops else 0.0
+        self.set_capacity(max(0, round(base * (1.0 - worst))))
+
+    def apply_latency_spike(self, factor: float) -> None:
+        """Register an active service-time inflation (factor >= 1) and recompute.
+
+        New requests draw a longer service duration from the inflated mean, so
+        the slowdown is felt by the simulation itself (real ``env.timeout``
+        delays).
+        """
+        self._active_latency_factors.append(factor)
+        self._recompute_service_time()
+
+    def release_latency_spike(self, factor: float) -> None:
+        """End one latency spike; restore base service time when none remain."""
+        try:
+            self._active_latency_factors.remove(factor)
+        except ValueError:  # pragma: no cover - defensive: unbalanced release
+            return
+        self._recompute_service_time()
+
+    def _recompute_service_time(self) -> None:
+        worst = max(self._active_latency_factors) if self._active_latency_factors else 1.0
+        self.service_time = max(0.0, self._base_service_time * worst)
+
+    def apply_hit_rate_drop(self, intensity: float) -> None:
+        """Register an active hit-rate loss and recompute the live hit-rate.
+
+        More misses fall through to the database, so the DB genuinely gets
+        more load during the outage.
+        """
+        self._active_hit_rate_drops.append(intensity)
+        self._recompute_hit_rate()
+
+    def release_hit_rate_drop(self, intensity: float) -> None:
+        """End one hit-rate drop; restore base hit-rate when none remain."""
+        try:
+            self._active_hit_rate_drops.remove(intensity)
+        except ValueError:  # pragma: no cover - defensive: unbalanced release
+            return
+        self._recompute_hit_rate()
+
+    def _recompute_hit_rate(self) -> None:
+        worst = max(self._active_hit_rate_drops) if self._active_hit_rate_drops else 0.0
+        self.hit_rate = max(0.0, self._base_hit_rate * (1.0 - worst))
 
     def draw_service_time(self, rng: np.random.Generator) -> float:
         """Sample a concrete service duration (seconds) from the live mean."""

@@ -41,6 +41,10 @@ Provider-calibrated starting points (AWS/Azure/GCP small tiers) live in
 The compare-runs engine (multi-cloud calibration, what-if A/B, capacity
 sweep + knee) lives in :mod:`sim_core.compare`, exposed on the CLI as
 ``eleven compare multi-cloud|what-if|sweep``.
+
+Named incident playbooks (``db_failover``, ``cache_eviction_storm``, ...) live
+in :mod:`sim_core.playbooks`, exposed on the CLI as ``eleven run ... --playbook
+NAME`` and ``eleven playbooks list``.
 """
 
 from __future__ import annotations
@@ -65,6 +69,7 @@ from sim_core.config import (
 )
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
+from sim_core.playbooks import PLAYBOOKS, Playbook, get_playbook, list_playbooks
 from sim_core.topology import Component, Topology
 
 __version__ = "0.1.0"
@@ -93,6 +98,11 @@ __all__ = [
     "MetricsCollector",
     "RequestRecord",
     "UtilizationSample",
+    # Incident playbooks
+    "Playbook",
+    "PLAYBOOKS",
+    "get_playbook",
+    "list_playbooks",
     # Topology
     "Component",
     "Topology",

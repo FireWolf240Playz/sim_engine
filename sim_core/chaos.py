@@ -26,23 +26,31 @@ def _window(event: ChaosEvent) -> float:
 def _component_failure(
     env: simpy.Environment, topology: Topology, event: ChaosEvent, rng: np.random.Generator
 ) -> Generator[object, None, None]:
-    """Temporarily remove a fraction of a random component's capacity.
+    """Temporarily remove a fraction of a component's live capacity.
 
     Fewer live slots means new requests genuinely queue longer; in-flight ones
     keep their slots until they finish, which is the realistic degradation.
+    When ``event.target`` names a node, the incident is aimed at exactly that
+    component (incident playbooks rely on this); otherwise a random victim is
+    drawn, which is the original behaviour.
+
+    The drop is reference-counted on the component, so overlapping windows on
+    the same node compose deterministically and a restore never cancels a
+    window that is still active.
     """
     if event.start_time > 0:
         yield env.timeout(event.start_time)
 
     while True:
-        victim = topology.pick_random(rng)
-        original_capacity = victim.capacity
-        new_capacity = max(0, round(original_capacity * (1.0 - event.intensity)))
-        victim.set_capacity(new_capacity)  # real: fewer slots -> real queuing
+        if event.target is not None:
+            victim = topology.component(event.target)
+        else:
+            victim = topology.pick_random(rng)
+        victim.apply_capacity_drop(event.intensity)  # real: fewer slots -> real queuing
 
         yield env.timeout(_window(event))
 
-        victim.set_capacity(original_capacity)  # restore
+        victim.release_capacity_drop(event.intensity)  # restore (or recompute)
         yield env.timeout(event.interval)
 
 
@@ -57,16 +65,16 @@ def _network_latency(
     if event.start_time > 0:
         yield env.timeout(event.start_time)
 
+    multiplier = 1.0 + event.intensity
+    victims = topology.components
     while True:
-        multiplier = 1.0 + event.intensity
-        victims = topology.components
         for comp in victims:
-            comp.inflate_service_time(multiplier)  # real: longer service delays
+            comp.apply_latency_spike(multiplier)  # real: longer service delays
 
         yield env.timeout(_window(event))
 
         for comp in victims:
-            comp.restore_service_time()
+            comp.release_latency_spike(multiplier)
         yield env.timeout(event.interval)
 
 
@@ -78,21 +86,19 @@ def _cache_outage(
     More misses fall through to the database, so the DB genuinely gets more
     load during the outage.
     """
-    if topology.cache is None:
+    cache = topology.cache
+    if cache is None:
         return  # nothing to fail - the process ends immediately
 
     if event.start_time > 0:
         yield env.timeout(event.start_time)
 
-    original_hit_rate = topology.cache.hit_rate
-    degraded = max(0.0, original_hit_rate * (1.0 - event.intensity))
-
     while True:
-        topology.cache.hit_rate = degraded  # real: more lookups hit the DB
+        cache.apply_hit_rate_drop(event.intensity)  # real: more lookups hit the DB
 
         yield env.timeout(_window(event))
 
-        topology.cache.hit_rate = original_hit_rate  # restore
+        cache.release_hit_rate_drop(event.intensity)  # restore (or recompute)
         yield env.timeout(event.interval)
 
 

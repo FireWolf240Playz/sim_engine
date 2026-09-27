@@ -3,9 +3,10 @@
 Split by concern:
 
 * :mod:`sim_core.cli.sim` - the ``run`` / ``demo`` simulation commands
-  (demo topology, config loading, PNG + JSON outputs) and the ``compare``
-  command (multi-cloud / what-if / capacity sweep, engine in
-  :mod:`sim_core.compare`);
+  (demo topology, config loading, PNG + JSON outputs), the ``playbooks``
+  command (built-in incident scenarios, engine in
+  :mod:`sim_core.playbooks`), and the ``compare`` command (multi-cloud /
+  what-if / capacity sweep, engine in :mod:`sim_core.compare`);
 * :mod:`sim_core.cli.pricing` - the ``prices`` / ``aws-prices`` /
   ``gcp-prices`` catalog commands (price table + provider handlers).
 
@@ -44,6 +45,7 @@ _COMMAND_HANDLERS: Dict[str, Callable[[argparse.Namespace], int]] = {
     "prices": pricing._cmd_prices,
     "aws-prices": pricing._cmd_aws_prices,
     "gcp-prices": pricing._cmd_gcp_prices,
+    "playbooks": sim._cmd_playbooks,
     "compare": sim._cmd_compare,
 }
 
@@ -70,6 +72,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"error: could not load config {config_path!r}: {exc}", file=sys.stderr)
             return 2
         report_path, json_path = args.report, args.json_path
+
+    playbook_name = getattr(args, "playbook", None)
+    if playbook_name:
+        try:
+            config = sim.apply_playbook(config, playbook_name)
+        except (KeyError, ValueError) as exc:
+            message = exc.args[0] if exc.args else str(exc)
+            print(f"error: {message}", file=sys.stderr)
+            return 2
 
     try:
         sim.run_simulation(config, report_path, json_path)

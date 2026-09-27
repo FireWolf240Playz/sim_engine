@@ -161,6 +161,7 @@ sim_core/
 ├── topology.py      # Component + Topology: live simpy.Resource wrappers
 ├── traffic.py       # Poisson arrivals, base curve + optional spike window
 ├── chaos.py         # Real failure injection (capacity / latency / cache)
+├── playbooks.py     # Named incident playbooks (db failover, latency spike, ...)
 ├── metrics.py       # RequestRecord, utilisation samples, pandas aggregation
 ├── engine.py        # CloudSimulator: wires everything into a simpy.Environment
 ├── compare.py       # Compare-runs engine: multi-cloud / what-if / sweep + knee
@@ -168,7 +169,7 @@ sim_core/
 ├── viz.py           # Matplotlib reports -> PNG (run + comparison charts)
 ├── __main__.py      # `python -m sim_core` entry point
 ├── cli/             # argparse tree split by concern (the "control file" is __init__)
-│   ├── sim.py       #    run / demo / compare commands
+│   ├── sim.py       #    run / demo / compare / playbooks commands
 │   └── pricing.py   #    prices / aws-prices / gcp-prices catalog commands
 ├── price_source/    # Provider price catalogs (azure / aws / gcp + constants)
 └── py.typed         # PEP 561: this is a fully-typed package
@@ -192,6 +193,32 @@ A cache **hit** serves the response and skips the database; a **miss** falls thr
 | `cache_outage` | Drives the cache hit-rate down (1.0 ⇒ fully disabled). | Fraction of hit-rate removed. |
 
 Each event holds the disruption for `duration`, restores the original value, and repeats every `interval` seconds.
+
+## Incident playbooks
+
+Instead of hand-crafting chaos windows, apply a named, realistic incident to any run. Each playbook picks its victim by *role* (database, cache, external API) — not node name — so the same incident works on any topology that has a node with that role:
+
+| Playbook | What it does |
+| --- | --- |
+| `db_failover` | 5 s full outage on the database, then 30 s at half capacity while the replica catches up. |
+| `cross_region_latency_spike` | Every hop in the path ~80% slower for 15 s. |
+| `cache_eviction_storm` | 90% of the cache hit-rate lost for 20 s; lookups fall through to the DB. |
+| `dependency_timeout_cascade` | The external API (or the database, when no external-API node exists) times out for 10 s, then retry traffic slows the whole path for 20 s. |
+
+```bash
+# List the built-in incidents
+python -m sim_core playbooks list
+
+# Run your topology under a DB failover
+python -m sim_core run my_topology.yaml --playbook db_failover
+
+# Add an incident to the built-in demo
+python -m sim_core demo --playbook cache_eviction_storm
+```
+
+The playbook's chaos events are *appended* to whatever chaos the config already defines (never replaced), and the first injection lands ~25% into the run (floored at 5 s) so the incident always fires inside the horizon. All four incidents mutate **live** SimPy state through the same apply/release machinery as raw chaos events, so overlapping windows on the same node compose instead of clobbering each other.
+
+As a library: `from sim_core import get_playbook` — `config = get_playbook("db_failover").apply(config)`.
 
 ## Reproducibility
 

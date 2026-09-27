@@ -25,6 +25,7 @@ from sim_core import (
     compare,
     render_report,
 )
+from sim_core.playbooks import get_playbook, list_playbooks
 from sim_core.viz import render_comparison
 
 DEFAULT_REPORT = "eleven_report.png"
@@ -150,6 +151,25 @@ def _format_summary(summary: Dict[str, Any]) -> str:
                 f"size-to {info['recommended_capacity']})"
             )
     return "\n".join(lines)
+
+
+def apply_playbook(config: SimulationConfig, name: str) -> SimulationConfig:
+    """Append a named incident playbook's chaos events to ``config``.
+
+    Raises a clear error for an unknown playbook name, or when the topology
+    lacks the node the incident needs (e.g. no database for ``db_failover``).
+    """
+    playbook = get_playbook(name)
+    patched = playbook.apply(config)
+    print(f"Playbook applied: {playbook.name} - {playbook.description}")
+    return patched
+
+
+def _cmd_playbooks(args: argparse.Namespace) -> int:
+    """Handler for the ``eleven playbooks list`` subcommand."""
+    for playbook in list_playbooks():
+        print(f"{playbook.name:<28} {playbook.description}")
+    return 0
 
 
 def load_config(path: str) -> SimulationConfig:
@@ -340,7 +360,11 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 
 def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
-    """Add the ``run`` / ``demo`` / ``compare`` subcommands to the CLI parser."""
+    """Add the ``run`` / ``demo`` / ``playbooks`` / ``compare`` subcommands.
+
+    ``run`` and ``demo`` accept ``--playbook NAME`` to layer a built-in
+    incident (see :mod:`sim_core.playbooks`) on top of the configured chaos.
+    """
     run_p = subparsers.add_parser(
         "run",
         help="Run a simulation from a config file (YAML or JSON).",
@@ -360,11 +384,36 @@ def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
         default=DEFAULT_JSON,
         help=f"Output path for the JSON metrics summary (default: {DEFAULT_JSON}).",
     )
+    run_p.add_argument(
+        "--playbook",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Append a built-in incident playbook to this run "
+            "(see `eleven playbooks list`), e.g. db_failover."
+        ),
+    )
 
-    subparsers.add_parser(
+    demo_p = subparsers.add_parser(
         "demo",
         help="Run the built-in demo topology (no config file needed).",
     )
+    demo_p.add_argument(
+        "--playbook",
+        default=None,
+        metavar="NAME",
+        help=(
+            "Append a built-in incident playbook to the demo "
+            "(see `eleven playbooks list`), e.g. db_failover."
+        ),
+    )
+
+    playbooks_p = subparsers.add_parser(
+        "playbooks",
+        help="Built-in incident playbooks (named, realistic chaos scenarios).",
+    )
+    playbooks_sub = playbooks_p.add_subparsers(dest="playbooks_action", required=True)
+    playbooks_sub.add_parser("list", help="Show every built-in incident playbook.")
 
     # -- compare: one engine, three faces ----------------------------------
     compare_p = subparsers.add_parser(

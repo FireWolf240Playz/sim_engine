@@ -409,6 +409,12 @@ class ChaosEvent(BaseModel):
       (0.5 -> 1.5x slower service).
     * ``CACHE_OUTAGE``: fraction of the cache hit-rate removed
       (1.0 -> cache fully disabled, every lookup misses).
+
+    ``target`` (optional) names a specific component to victimise for
+    ``COMPONENT_FAILURE`` events; without it a random component is drawn, which
+    is the original behaviour and keeps old configs unchanged. Incident
+    playbooks (:mod:`sim_core.playbooks`) use this to aim an incident at, e.g.,
+    the database node of whatever topology they are applied to.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -421,6 +427,14 @@ class ChaosEvent(BaseModel):
         None,
         gt=0.0,
         description="How long each disruption lasts. Defaults to the gap between injections.",
+    )
+    target: Optional[str] = Field(
+        None,
+        description=(
+            "Component name to fail (COMPONENT_FAILURE only). Must be a node "
+            "name in the topology. None (default) keeps the random-victim "
+            "behaviour."
+        ),
     )
 
 
@@ -456,6 +470,18 @@ class SimulationConfig(BaseModel):
         if isinstance(value, dict) and "load_balancer" in value:
             return TopologyConfig.model_validate(value).to_graph()
         return value
+
+    @model_validator(mode="after")
+    def _validate_chaos_targets(self) -> "SimulationConfig":
+        """Fail fast when a chaos event names a node the topology does not have."""
+        names = {node.name for node in self.topology.nodes}
+        for event in self.chaos:
+            if event.target is not None and event.target not in names:
+                raise ValueError(
+                    f"chaos event targets unknown component {event.target!r} "
+                    f"(known nodes: {sorted(names)})"
+                )
+        return self
 
     # -- file I/O: YAML / JSON ----------------------------------------------
     def _jsonable(self) -> Dict[str, Any]:

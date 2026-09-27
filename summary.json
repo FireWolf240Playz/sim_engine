@@ -1,44 +1,51 @@
 {
-  "requests": 237,
+  "requests": 233,
   "completion_rate": 1.0,
   "failed_requests": 0,
-  "sla_compliance": 0.8185654008438819,
-  "avg_latency": 11.363959621337576,
-  "p50_latency": 7.7008641811408935,
-  "p95_latency": 32.193799145451045,
-  "p99_latency": 38.0515776240015,
-  "cache_hit_rate": 0.7426160337552743,
+  "sla_compliance": 0.9785407725321889,
+  "avg_latency": 2.801517477289725,
+  "p50_latency": 1.596098910740416,
+  "p95_latency": 10.07625483708244,
+  "p99_latency": 17.545803373941236,
+  "cache_hit_rate": 0.7909604519774012,
   "total_retries": 0,
   "total_cost": 0,
   "cost_breakdown_by_component": {},
   "component_sizing": {
-    "load-balancer": {
-      "mean_utilization": 0.09743589743589744,
-      "p95_utilization": 0.4166666666666667,
+    "alb": {
+      "mean_utilization": 0.05375,
+      "p95_utilization": 0.22187499999999982,
+      "p95_queue": 0.0,
+      "recommended_capacity": 6,
+      "status": "oversized"
+    },
+    "worker-a": {
+      "mean_utilization": 0.16,
+      "p95_utilization": 0.5,
+      "p95_queue": 0.0,
+      "recommended_capacity": 7,
+      "status": "oversized"
+    },
+    "worker-b": {
+      "mean_utilization": 0.2225,
+      "p95_utilization": 0.6374999999999993,
       "p95_queue": 0.0,
       "recommended_capacity": 8,
       "status": "oversized"
     },
-    "app-worker": {
-      "mean_utilization": 0.7153846153846154,
-      "p95_utilization": 1.0,
-      "p95_queue": 50.8,
-      "recommended_capacity": 62,
-      "status": "right_sized"
-    },
-    "redis-cache": {
-      "mean_utilization": 0.08846153846153847,
-      "p95_utilization": 0.25,
+    "redis": {
+      "mean_utilization": 0.03833333333333333,
+      "p95_utilization": 0.21249999999999974,
       "p95_queue": 0.0,
-      "recommended_capacity": 5,
+      "recommended_capacity": 4,
       "status": "oversized"
     },
     "postgres": {
-      "mean_utilization": 0.6461538461538462,
+      "mean_utilization": 0.46399999999999997,
       "p95_utilization": 1.0,
-      "p95_queue": 21.799999999999997,
-      "recommended_capacity": 29,
-      "status": "right_sized"
+      "p95_queue": 6.549999999999997,
+      "recommended_capacity": 13,
+      "status": "oversized"
     }
   }
 }
