@@ -11,15 +11,31 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import { DEMO_CONFIG } from "../lib/demo";
-import type { SimulateResponse } from "../types";
+import type { SimulateResponse, SimulationConfig } from "../types";
 
 /**
- * One shared run across the app: the selected incident, the active run,
- * and its result. The Simulator view renders it; the Incidents view drives
- * it ("run this incident" sets the playbook, fires the run, navigates home).
- * The engine call lives here exactly once — no view owns the fetch.
+ * One shared run across the app: the active architecture, the selected
+ * incident, the active run, and its result. The Simulator view renders it;
+ * the Incidents view drives it ("run this incident" sets the playbook,
+ * fires the run, navigates home). The engine call lives here exactly once
+ * — no view owns the fetch.
+ *
+ * The active architecture defaults to the calibrated demo topology; the
+ * Import page swaps it in (any uploaded YAML/JSON/Terraform config) and
+ * every subsequent run — clean or under any incident — targets it until
+ * it is reset.
  */
 interface RunStateValue {
+  /** The topology+traffic every run simulates (demo or imported). */
+  config: SimulationConfig;
+  /** One-line label for chips/headers: "demo topology" or the import label. */
+  architectureLabel: string;
+  /** true while the demo topology is active. */
+  isDemoArchitecture: boolean;
+  /** Swap in an imported architecture (label shown in the UI). */
+  setArchitecture: (config: SimulationConfig, label: string) => void;
+  /** Back to the calibrated demo topology. */
+  resetArchitecture: () => void;
   /** null = clean run; otherwise a playbook key. */
   playbook: string | null;
   setPlaybook: (playbook: string | null) => void;
@@ -41,13 +57,27 @@ function friendlyError(err: unknown): string {
   return "Something went wrong on my side — try RUN again.";
 }
 
+const DEMO_LABEL = "demo topology";
+
 export function RunStateProvider({ children }: { children: ReactNode }) {
   const [playbook, setPlaybook] = useState<string | null>("db_failover");
   const [result, setResult] = useState<SimulateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<SimulationConfig>(DEMO_CONFIG);
+  const [architectureLabel, setArchitectureLabel] = useState<string>(DEMO_LABEL);
+
+  const setArchitecture = useCallback((next: SimulationConfig, label: string) => {
+    setConfig(next);
+    setArchitectureLabel(label);
+  }, []);
+
+  const resetArchitecture = useCallback(() => {
+    setConfig(DEMO_CONFIG);
+    setArchitectureLabel(DEMO_LABEL);
+  }, []);
 
   const run = useMutation({
-    mutationFn: (pb: string | null) => api.simulate(DEMO_CONFIG, pb),
+    mutationFn: (pb: string | null) => api.simulate(config, pb),
     onSuccess: (data) => {
       setResult(data);
       setError(null);
@@ -69,6 +99,11 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<RunStateValue>(
     () => ({
+      config,
+      architectureLabel,
+      isDemoArchitecture: config === DEMO_CONFIG,
+      setArchitecture,
+      resetArchitecture,
       playbook,
       setPlaybook,
       requestRun,
@@ -76,7 +111,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       error,
       isPending: run.isPending,
     }),
-    [playbook, requestRun, result, error, run.isPending],
+    [config, architectureLabel, setArchitecture, resetArchitecture, playbook, requestRun, result, error, run.isPending],
   );
 
   return <RunStateContext.Provider value={value}>{children}</RunStateContext.Provider>;

@@ -247,3 +247,89 @@ def test_compare_sweep_requires_param_and_values(client: TestClient) -> None:
     assert client.post(
         "/compare", json=_body(mode="sweep", param="worker.max_capacity")
     ).status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# POST /imports
+# ---------------------------------------------------------------------------
+
+import json as _json  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_NATIVE_YAML = (_Path(__file__).resolve().parent.parent / "examples" / "api_stack.yaml").read_text(encoding="utf-8")
+
+_TF_DOC = {
+    "format_version": "1.0",
+    "values": {
+        "root_module": {
+            "resources": [
+                {"address": "aws_lb.web", "type": "aws_lb", "name": "web",
+                 "instances": [{"attributes": {}}]},
+                {"address": "aws_ecs_service.api", "type": "aws_ecs_service", "name": "api",
+                 "instances": [{"attributes": {"desired_count": 2}}]},
+                {"address": "aws_db_instance.main", "type": "aws_db_instance", "name": "main",
+                 "instances": [{"attributes": {"instance_class": "db.t3.small"}}]},
+            ]
+        }
+    },
+}
+
+
+def test_imports_native_yaml(client: TestClient) -> None:
+    response = client.post("/imports", json={"content": _NATIVE_YAML, "filename": "api_stack.yaml"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "native_yaml"
+    assert payload["report"]["source"] == "api_stack.yaml"
+    assert payload["report"]["node_count"] == 6
+    names = {n["name"] for n in payload["report"]["nodes"]}
+    assert {"lb", "web-a", "redis", "postgres"} <= names
+    # The returned config is a valid SimulationConfig: it can be simulated.
+    simulate = client.post("/simulate", json={"config": payload["config"]})
+    assert simulate.status_code == 200
+    assert simulate.json()["summary"]["requests"] > 0
+
+
+def test_imports_terraform_json(client: TestClient) -> None:
+    response = client.post("/imports", json={"content": _json.dumps(_TF_DOC)})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["format"] == "terraform_json"
+    roles = {n["name"]: n["role"] for n in payload["report"]["nodes"]}
+    assert roles == {"web": "load_balancer", "api": "worker", "main": "database"}
+    # Estimates are labeled, traffic is invented and warned about.
+    assert any("estimated" in a.lower() for a in payload["report"]["assumptions"])
+    assert any("traffic" in w.lower() for w in payload["report"]["warnings"])
+    # The imported config simulates against the db_failover playbook.
+    simulate = client.post(
+        "/simulate", json={"config": payload["config"], "playbook": "db_failover"}
+    )
+    assert simulate.status_code == 200
+
+
+def test_imports_garbage_is_400(client: TestClient) -> None:
+    response = client.post("/imports", json={"content": "definitely: [not: valid {"})
+    assert response.status_code == 400
+    assert "parse" in response.json()["detail"]
+
+
+def test_imports_only_unmappable_resources_is_400(client: TestClient) -> None:
+    doc = {
+        "format_version": "1.0",
+        "values": {
+            "root_module": {
+                "resources": [
+                    {"address": "aws_vpc.main", "type": "aws_vpc", "name": "main",
+                     "instances": [{"attributes": {}}]}
+                ]
+            }
+        },
+    }
+    response = client.post("/imports", json={"content": _json.dumps(doc)})
+    assert response.status_code == 400
+    assert "no mappable resources" in response.json()["detail"]
+    assert "aws_vpc" in response.json()["detail"]
+
+
+def test_imports_empty_content_is_422(client: TestClient) -> None:
+    assert client.post("/imports", json={"content": ""}).status_code == 422

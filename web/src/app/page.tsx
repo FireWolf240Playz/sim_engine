@@ -8,7 +8,7 @@ import { StatCards } from "@/core/components/StatCards";
 import { TimelineChart } from "@/core/components/TimelineChart";
 import { TopologyDiagram } from "@/core/components/TopologyDiagram";
 import { api } from "@/core/api/client";
-import { DEMO_CONFIG, DEMO_META, playbookTargets } from "@/core/lib/demo";
+import { DEMO_META, playbookTargets } from "@/core/lib/demo";
 import { chaosWindows } from "@/core/lib/chaos";
 import { useRunState } from "@/core/state/RunStateContext";
 
@@ -37,13 +37,24 @@ function ErrorState({ message }: { message: string }) {
 }
 
 export default function HomePage() {
-  const { playbook, setPlaybook, requestRun, result, error, isPending } = useRunState();
+  const {
+    config,
+    architectureLabel,
+    isDemoArchitecture,
+    resetArchitecture,
+    playbook,
+    setPlaybook,
+    requestRun,
+    result,
+    error,
+    isPending,
+  } = useRunState();
   const { data: playbooks } = useQuery({ queryKey: ["playbooks"], queryFn: api.playbooks });
 
   const sizing = result?.summary.component_sizing;
   const { names: targetNames, wholePath } = playbookTargets(
     playbook,
-    DEMO_CONFIG.topology.nodes,
+    config.topology.nodes,
   );
   const context = playbook ? `under ${playbook.replace(/_/g, " ")}` : "on the clean run";
 
@@ -55,15 +66,29 @@ export default function HomePage() {
             Stress test
           </h1>
           <p className="mt-1.5 text-sm leading-6 text-ink-dim">
-            Pick an incident, run it against the demo topology, and see
+            Pick an incident, run it against the{" "}
+            <span className="font-medium text-ink">{architectureLabel}</span>, and see
             exactly where the architecture breaks — and what keeping it alive
             costs — before it&apos;s real infrastructure.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="hidden font-mono text-[11px] text-ink-dim lg:inline">
-            seed 42 · 60s run
-          </span>
+        <div className="flex flex-wrap items-center gap-3">
+          {!isDemoArchitecture ? (
+            <span className="flex items-center gap-2 rounded-lg border border-accent/40 bg-accent-soft px-2.5 py-1.5">
+              <span className="text-[12px] font-medium text-accent">{architectureLabel}</span>
+              <button
+                type="button"
+                onClick={resetArchitecture}
+                className="text-[11.5px] text-ink-dim outline-none transition-colors hover:text-ink"
+              >
+                reset
+              </button>
+            </span>
+          ) : (
+            <span className="hidden font-mono text-[11px] text-ink-dim lg:inline">
+              seed 42 · 60s run
+            </span>
+          )}
           <button
             type="button"
             onClick={() => requestRun()}
@@ -95,8 +120,8 @@ export default function HomePage() {
             aside={playbook ? `incident targets: ${wholePath ? "whole path" : targetNames.join(", ")}` : "clean run"}
           >
             <TopologyDiagram
-              nodes={DEMO_CONFIG.topology.nodes}
-              edges={DEMO_CONFIG.topology.edges ?? []}
+              nodes={config.topology.nodes}
+              edges={config.topology.edges ?? []}
               sizing={sizing}
               targetNames={targetNames}
               wholePath={wholePath}
@@ -106,14 +131,14 @@ export default function HomePage() {
           <Panel title="Timeline" aside="latency vs chaos, one clock">
             <TimelineChart
               ticks={result.timeseries ?? []}
-              slaTarget={DEMO_CONFIG.sla_target}
-              windows={chaosWindows(result.chaos, DEMO_CONFIG.traffic.duration)}
-              horizon={DEMO_CONFIG.traffic.duration}
+              slaTarget={config.sla_target}
+              windows={chaosWindows(result.chaos, config.traffic.duration)}
+              horizon={config.traffic.duration}
             />
           </Panel>
 
           <Panel title="Sizing" aside="where the money sits">
-            <SizingTable nodes={DEMO_CONFIG.topology.nodes} sizing={sizing} />
+            <SizingTable nodes={config.topology.nodes} sizing={sizing} />
           </Panel>
         </>
       ) : (

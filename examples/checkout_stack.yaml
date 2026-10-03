@@ -1,0 +1,97 @@
+# ============================================================================
+# Eleven example: "Checkout stack" — a realistic e-commerce API
+#
+#   lb ──(0.6)──> api-a ──┬──(0.6)──> session-cache ──(miss)──> orders-db
+#    └──(0.4)──> api-b ──┼──(0.3)───────────────────────────> orders-db
+#                        └──(0.1)──> payments-api (external, slowest hop)
+#
+#   (api-b mirrors api-a: 0.6 cache / 0.3 db / 0.1 payments)
+#
+# What this scenario demonstrates:
+#   * two workers of different size (uneven load split 60/40)
+#   * a cache that absorbs 80% of lookups; writes (30%) always hit the DB
+#   * an external payment call on 10% of requests (third-party latency)
+#   * a flash-sale spike (8 rps) at t=45 that pushes the DB past its limit
+#   * the database is the weak link: db_failover on this topology shows
+#     the biggest score drop, exactly like a real outage
+#
+# Upload it in the UI (Import page) or run it in the CLI:
+#   python -m sim_core run examples/checkout_stack.yaml
+#   python -m sim_core run examples/checkout_stack.yaml --playbook db_failover
+# ============================================================================
+
+seed: 42                  # fixed seed => reproducible results
+duration: 120.0           # total simulated seconds
+metrics_interval: 2.0     # sample utilization every 2 s
+sla_target: 12.0          # seconds; flagged in the report when p95 exceeds it
+
+topology:
+  nodes:
+    - name: lb
+      role: load_balancer
+      max_capacity: 40
+      service_time: 0.15
+      cost_per_hour: 0.10
+
+    - name: api-a
+      role: worker
+      max_capacity: 12
+      service_time: 0.6
+      timeout: 5.0
+      retry_limit: 2
+      retry_backoff: 0.3
+      cost_per_hour: 0.08
+
+    - name: api-b
+      role: worker
+      max_capacity: 8          # smaller instance => busier under load
+      service_time: 0.7
+      timeout: 5.0
+      retry_limit: 2
+      retry_backoff: 0.3
+      cost_per_hour: 0.06
+
+    - name: session-cache
+      role: cache
+      max_capacity: 24
+      service_time: 0.04
+      hit_rate: 0.8            # 80% of lookups stop here
+      cost_per_hour: 0.05
+
+    - name: orders-db
+      role: database
+      max_capacity: 4          # small RDS: the deliberate weak link
+      service_time: 1.5
+      timeout: 10.0
+      retry_limit: 3
+      retry_backoff: 0.5
+      cost_per_hour: 0.25
+
+    - name: payments-api
+      role: external_api       # third-party hop: slow, fixed by the provider
+      max_capacity: 10
+      service_time: 1.8
+      cost_per_hour: 0.0
+
+  edges:
+    - { source: lb,        target: api-a,        probability: 0.6 }
+    - { source: lb,        target: api-b,        probability: 0.4 }
+    - { source: api-a,     target: session-cache, probability: 0.6 }
+    - { source: api-a,     target: orders-db,    probability: 0.3 }
+    - { source: api-a,     target: payments-api,  probability: 0.1 }
+    - { source: api-b,     target: session-cache, probability: 0.6 }
+    - { source: api-b,     target: orders-db,    probability: 0.3 }
+    - { source: api-b,     target: payments-api,  probability: 0.1 }
+    - { source: session-cache, target: orders-db, probability: 1.0 }  # on miss
+
+  entry_node: lb
+
+traffic:
+  base_rps: 3.0             # sustained checkout rate
+  duration: 120.0
+  spike_rps: 8.0            # flash sale at t=45 (2.7x)
+  spike_start: 45.0
+  spike_duration: 15.0
+
+# No chaos here on purpose: incidents come from the playbooks
+# (db_failover, cache_eviction_storm, ...) run against this topology.

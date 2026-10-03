@@ -2,6 +2,7 @@ import type {
   CompareRequest,
   CompareResponse,
   HealthResponse,
+  ImportResponse,
   PlaybookListResponse,
   PresetListResponse,
   SimulateResponse,
@@ -87,4 +88,11 @@ export const api = {
     }),
 
   presets: () => request<PresetListResponse>("/presets"),
+
+  /** Upload an architecture (native YAML/JSON or terraform show -json) → runnable config. */
+  importArchitecture: (content: string, filename?: string) =>
+    request<ImportResponse>("/imports", {
+      method: "POST",
+      body: JSON.stringify({ content, filename: filename ?? null }),
+    }),
 };

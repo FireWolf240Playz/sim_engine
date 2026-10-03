@@ -10,6 +10,7 @@ import { useTheme } from "@/core/state/ThemeContext";
 const NAV = [
   { href: "/", label: "Simulator", icon: "play" },
   { href: "/incidents", label: "Incidents", icon: "alert" },
+  { href: "/import", label: "Import", icon: "upload" },
   { href: "/compare", label: "Compare", icon: "columns" },
   { href: "/presets", label: "Presets", icon: "layers" },
 ] as const;
@@ -93,6 +94,14 @@ function NavGlyph({ icon, className = "h-4 w-4" }: { icon: NavIcon; className?: 
     return (
       <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
         <path d="M4 13V6M8 13V3M12 13V8" {...stroke} />
+      </svg>
+    );
+  }
+  if (icon === "upload") {
+    return (
+      <svg viewBox="0 0 16 16" className={className} aria-hidden="true">
+        <path d="M8 10V2.8M5.4 5.4 8 2.8l2.6 2.6" {...stroke} />
+        <path d="M2.5 10.5v2A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-2" {...stroke} />
       </svg>
     );
   }

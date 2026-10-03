@@ -3,22 +3,20 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/core/api/client";
-import { DEMO_CONFIG, playbookTargets } from "@/core/lib/demo";
+import { playbookTargets } from "@/core/lib/demo";
 import { useRunState } from "@/core/state/RunStateContext";
 import {
   SEVERITY_TEXT,
   scoreSeverity,
 } from "@/core/lib/format";
+import type { TopologyNode } from "@/core/types";
 import { SeverityIcon } from "@/core/components/SeverityIcon";
 
-/** Human target scope for each incident on THIS demo topology. */
-function targetScope(playbook: string): string {
-  const { names, wholePath } = playbookTargets(
-    playbook,
-    DEMO_CONFIG.topology.nodes,
-  );
+/** Human target scope for each incident on the ACTIVE topology. */
+function targetScope(playbook: string, nodes: TopologyNode[]): string {
+  const { names, wholePath } = playbookTargets(playbook, nodes);
   if (wholePath) return "whole path";
-  const roles = DEMO_CONFIG.topology.nodes
+  const roles = nodes
     .filter((n) => names.includes(n.name))
     .map((n) => n.role.replace("_", " "));
   return roles.length ? roles.join(" + ") : "—";
@@ -48,7 +46,7 @@ function RunButton({
 export default function IncidentsPage() {
   const router = useRouter();
   const pathname = usePathname();
-  const { requestRun, result, playbook, isPending } = useRunState();
+  const { config, architectureLabel, requestRun, result, playbook, isPending } = useRunState();
   const { data: playbooks } = useQuery({ queryKey: ["playbooks"], queryFn: api.playbooks });
 
   const runIncident = (name: string | null) => {
@@ -67,8 +65,9 @@ export default function IncidentsPage() {
           <p className="mt-1.5 text-sm leading-6 text-ink-dim">
             Named, realistic failure shapes — each one mutates the live
             simulation (real capacity drops, real service-time inflation),
-            not a metrics log. Run one against the demo topology and watch
-            the score fall.
+            not a metrics log. Run one against the{" "}
+            <span className="font-medium text-ink">{architectureLabel}</span> and
+            watch the score fall.
           </p>
         </div>
         {lastScore !== null ? (
@@ -96,7 +95,7 @@ export default function IncidentsPage() {
             <span className="text-[14px] font-medium text-ink">
               {p.name.replace(/_/g, " ")}
             </span>
-            <span className="text-[13px] text-ink-dim">{targetScope(p.name)}</span>
+            <span className="text-[13px] text-ink-dim">{targetScope(p.name, config.topology.nodes)}</span>
             <span className="text-[13px] leading-6 text-ink-dim">{p.description}</span>
             <div className="sm:justify-self-end">
               <RunButton onClick={() => runIncident(p.name)} disabled={isPending} />

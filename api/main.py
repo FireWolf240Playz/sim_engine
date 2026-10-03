@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import sim_core
-from api.routes import compare, playbooks, presets, simulate
+from api.routes import compare, imports_api, playbooks, presets, simulate
 from api.schemas import HealthResponse
 
 
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
 
     app.include_router(simulate.router)
     app.include_router(compare.router)
+    app.include_router(imports_api.router)
     app.include_router(playbooks.router)
     app.include_router(presets.router)
 

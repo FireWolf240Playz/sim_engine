@@ -97,6 +97,31 @@ class PresetListResponse(BaseModel):
     count: int
 
 
+class ImportRequest(BaseModel):
+    """One architecture upload: raw text plus (optionally) its filename.
+
+    Accepted formats (auto-detected): Eleven native YAML/JSON
+    (``examples/api_stack.yaml`` shape) or ``terraform show -json`` output.
+    """
+
+    content: str = Field(..., min_length=1, description="The file text (YAML, JSON, or terraform show -json output).")
+    filename: str | None = Field(None, description="Original filename, for labeling only.")
+
+
+class ImportResponse(BaseModel):
+    """The imported, fully-validatable config plus what was understood/assumed.
+
+    ``config`` can be dropped straight into ``POST /simulate``. ``report``
+    carries the node/edge summary, the estimate assumptions (Terraform path
+    labels every filled-in parameter), warnings (invented traffic, skipped
+    resources), and the auto-detected source format.
+    """
+
+    format: str
+    config: SimulationConfig
+    report: dict[str, Any]
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str

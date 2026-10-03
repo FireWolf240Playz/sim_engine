@@ -197,6 +197,37 @@ export interface Preset {
   cost_per_hour?: number | null;
 }
 
+// ---------------------------------------------------------------------------
+// Architecture import (see `api/schemas.py::ImportResponse`,
+// `sim_core/importers.py`)
+// ---------------------------------------------------------------------------
+
+export interface ImportNodeSummary {
+  name: string;
+  role: ComponentRole;
+  max_capacity: number;
+  service_time: number;
+}
+
+export interface ImportReport {
+  format: "native_yaml" | "native_json" | "terraform_json";
+  source: string | null;
+  node_count: number;
+  edge_count: number;
+  nodes: ImportNodeSummary[];
+  edges: TopologyEdge[];
+  assumptions: string[];
+  warnings: string[];
+  unmapped_resources: string[];
+}
+
+export interface ImportResponse {
+  format: string;
+  /** A fully valid SimulationConfig — drop it straight into POST /simulate. */
+  config: SimulationConfig;
+  report: ImportReport;
+}
+
 export interface PresetListResponse {
   presets: Record<string, Preset>;
   count: number;
