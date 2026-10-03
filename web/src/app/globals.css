@@ -69,3 +69,37 @@ body {
   background: var(--color-surface-0);
   color: var(--color-ink);
 }
+
+/*
+  Topology diagram motion — restraint lens: exactly two loops, each
+  meaning-bearing (motion must reinforce meaning, not decorate):
+  1. edge flow — request traffic drifting source → target along edges
+  2. target ring — the selected incident "locked on" its victim node(s)
+  Both freeze under prefers-reduced-motion.
+*/
+@keyframes eleven-edge-flow {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+@keyframes eleven-target-ring {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+.eleven-edge-flow {
+  animation: eleven-edge-flow 1.8s linear infinite;
+}
+
+.eleven-target-ring {
+  animation: eleven-target-ring 1.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eleven-edge-flow,
+  .eleven-target-ring {
+    animation: none;
+  }
+}
