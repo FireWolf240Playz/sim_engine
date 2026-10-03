@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { ComponentRole, ComponentSizing, TopologyEdge, TopologyNode } from "../types";
 import {
@@ -115,54 +116,190 @@ interface Positioned {
 }
 
 /**
- * Layered graph layout: entries (nodes nothing points at) sit in column 0,
- * BFS depth gives the rest their column, and columns center vertically on a
- * shared centerline (compact nodes keep multi-node columns tidy).
+ * Column assignment, longest-path style: a node sits one column past its
+ * DEEPEST source, so (almost) every edge spans exactly one column. The old
+ * BFS "first discovery" depth let a node land left of one of its sources,
+ * and those long multi-column diagonals were the main source of the choppy,
+ * crossing connections. Kahn's topological order keeps it deterministic;
+ * nodes stuck in a cycle fall back to their original order.
  */
-function layout(nodes: TopologyNode[], edges: TopologyEdge[]): Positioned[] {
-  const targets = new Set(edges.map((e) => e.target));
-  const entries = nodes.filter((n) => !targets.has(n.name));
-  const starts = (entries.length ? entries : nodes).map((n) => n.name);
+function assignColumns(nodes: TopologyNode[], edges: TopologyEdge[]): Map<string, number> {
+  const names = new Set(nodes.map((n) => n.name));
+  const valid = edges.filter(
+    (e) => names.has(e.source) && names.has(e.target) && e.source !== e.target,
+  );
 
-  const depth = new Map<string, number>();
-  let frontier = [...starts];
-  starts.forEach((name) => depth.set(name, 0));
-  let d = 1;
-  while (frontier.length) {
-    const next: string[] = [];
-    for (const name of frontier) {
-      for (const edge of edges) {
-        if (edge.source !== name) continue;
-        if (!depth.has(edge.target)) {
-          depth.set(edge.target, d);
-          next.push(edge.target);
-        }
+  const sources = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  const indegree = new Map<string, number>();
+  nodes.forEach((n) => indegree.set(n.name, 0));
+  for (const e of valid) {
+    sources.set(e.target, [...(sources.get(e.target) ?? []), e.source]);
+    outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e.target]);
+    indegree.set(e.target, (indegree.get(e.target) ?? 0) + 1);
+  }
+
+  const topo: string[] = [];
+  const placed = new Set<string>();
+  const queue = nodes.map((n) => n.name).filter((n) => (indegree.get(n) ?? 0) === 0);
+  while (queue.length) {
+    const name = queue.shift()!;
+    topo.push(name);
+    placed.add(name);
+    for (const t of outgoing.get(name) ?? []) {
+      const rest = (indegree.get(t) ?? 1) - 1;
+      indegree.set(t, rest);
+      if (rest === 0) queue.push(t);
+    }
+  }
+  for (const n of nodes) if (!placed.has(n.name)) topo.push(n.name);
+
+  const col = new Map<string, number>();
+  for (const name of topo) {
+    const srcs = sources.get(name) ?? [];
+    col.set(name, srcs.length ? Math.max(...srcs.map((s) => col.get(s) ?? 0)) + 1 : 0);
+  }
+  return col;
+}
+
+/**
+ * Barycenter crossing reduction (Sugiyama-style): every column is re-sorted
+ * by the mean position of its already-placed neighbors, sweeping
+ * left→right then right→left over a few passes. This is what straightens
+ * fan-outs into parallel, uncrossed curves — ties keep the original order,
+ * so the result is deterministic for the same input.
+ */
+function orderColumns(
+  columns: Map<number, TopologyNode[]>,
+  sources: Map<string, string[]>,
+  outgoing: Map<string, string[]>,
+): void {
+  const sortedCols = [...columns.keys()].sort((a, b) => a - b);
+  const pos = new Map<string, number>();
+  for (const c of sortedCols) columns.get(c)!.forEach((n, i) => pos.set(n.name, i));
+
+  const meanPos = (name: string, useSources: boolean): number => {
+    const neighbors = (useSources ? sources : outgoing).get(name) ?? [];
+    const idxs: number[] = [];
+    for (const n of neighbors) {
+      const p = pos.get(n);
+      if (p !== undefined) idxs.push(p);
+    }
+    return idxs.length ? idxs.reduce((a, b) => a + b, 0) / idxs.length : Number.POSITIVE_INFINITY;
+  };
+
+  for (let sweep = 0; sweep < 3; sweep += 1) {
+    for (const leftToRight of [true, false]) {
+      const cols = leftToRight ? sortedCols : [...sortedCols].reverse();
+      for (const c of cols) {
+        const colNodes = columns.get(c)!;
+        colNodes.sort((a, b) => meanPos(a.name, leftToRight) - meanPos(b.name, leftToRight));
+        colNodes.forEach((n, i) => pos.set(n.name, i));
       }
     }
-    frontier = next;
-    d += 1;
   }
-  for (const node of nodes) {
-    if (!depth.has(node.name)) depth.set(node.name, 0);
-  }
+}
+
+/**
+ * Layered graph layout: longest-path columns (so edges span one column),
+ * barycenter ordering inside each column (so edges barely cross), and
+ * columns centering vertically on a shared centerline.
+ */
+function layout(nodes: TopologyNode[], edges: TopologyEdge[]): Positioned[] {
+  const col = assignColumns(nodes, edges);
 
   const columns = new Map<number, TopologyNode[]>();
   for (const node of nodes) {
-    const c = depth.get(node.name) ?? 0;
+    const c = col.get(node.name) ?? 0;
     columns.set(c, [...(columns.get(c) ?? []), node]);
   }
 
-  const colHeights = [...columns.values()].map((col) => col.length * NODE_H + (col.length - 1) * GAP_Y);
+  // Adjacency for the ordering pass (same filtering rules as assignColumns).
+  const names = new Set(nodes.map((n) => n.name));
+  const valid = edges.filter(
+    (e) => names.has(e.source) && names.has(e.target) && e.source !== e.target,
+  );
+  const sources = new Map<string, string[]>();
+  const outgoing = new Map<string, string[]>();
+  for (const e of valid) {
+    sources.set(e.target, [...(sources.get(e.target) ?? []), e.source]);
+    outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e.target]);
+  }
+  orderColumns(columns, sources, outgoing);
+
+  const sortedCols = [...columns.keys()].sort((a, b) => a - b);
+  const colHeights = sortedCols.map((c) => {
+    const n = columns.get(c)!.length;
+    return n * NODE_H + (n - 1) * GAP_Y;
+  });
   const maxColH = colHeights.length ? Math.max(...colHeights) : 0;
   const result: Positioned[] = [];
-  for (const [col, colNodes] of [...columns.entries()].sort((a, b) => a[0] - b[0])) {
+  for (const c of sortedCols) {
+    const colNodes = columns.get(c)!;
     const colH = colNodes.length * NODE_H + (colNodes.length - 1) * GAP_Y;
     const top = PAD + (maxColH - colH) / 2;
     colNodes.forEach((node, j) => {
-      result.push({ node, x: PAD + col * (NODE_W + GAP_X), y: top + j * (NODE_H + GAP_Y), col });
+      result.push({ node, x: PAD + c * (NODE_W + GAP_X), y: top + j * (NODE_H + GAP_Y), col: c });
     });
   }
   return result;
+}
+
+interface EdgeGeom {
+  key: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/**
+ * Where each edge touches its nodes. Outgoing edges spread along the right
+ * edge of the source (incoming along the left of the target), each ordered
+ * by the OTHER node's vertical position — so a fan-out leaves as a clean
+ * fan, one attachment per edge, instead of a bundle at a single point, and
+ * the curves that must cross (the graph forces some) meet mid-gap at a
+ * clean angle rather than piling up on the node border.
+ */
+function computeEdges(positioned: Positioned[], edges: TopologyEdge[]): EdgeGeom[] {
+  const byName = new Map(positioned.map((p) => [p.node.name, p] as const));
+  const valid = edges.filter((e) => byName.has(e.source) && byName.has(e.target));
+
+  // attachment point: spread slots across the middle 64% of the card height
+  const slot = (p: Positioned, side: "out" | "in", i: number, n: number) => {
+    const t = (i + 1) / (n + 1);
+    return {
+      x: side === "out" ? p.x + NODE_W : p.x,
+      y: p.y + NODE_H * (0.18 + 0.64 * t),
+    };
+  };
+
+  const key = (e: TopologyEdge) => `${e.source}|${e.target}`;
+  const src = new Map<string, { x: number; y: number }>();
+  const dst = new Map<string, { x: number; y: number }>();
+
+  for (const name of new Set(valid.map((e) => e.source))) {
+    const p = byName.get(name)!;
+    const list = valid
+      .filter((e) => e.source === name)
+      .sort((a, b) => byName.get(a.target)!.y - byName.get(b.target)!.y);
+    list.forEach((e, i) => src.set(key(e), slot(p, "out", i, list.length)));
+  }
+  for (const name of new Set(valid.map((e) => e.target))) {
+    const p = byName.get(name)!;
+    const list = valid
+      .filter((e) => e.target === name)
+      .sort((a, b) => byName.get(a.source)!.y - byName.get(b.source)!.y);
+    list.forEach((e, i) => dst.set(key(e), slot(p, "in", i, list.length)));
+  }
+
+  const out: EdgeGeom[] = [];
+  for (const e of valid) {
+    const s = src.get(key(e));
+    const d = dst.get(key(e));
+    if (s && d) out.push({ key: key(e), x1: s.x, y1: s.y, x2: d.x, y2: d.y });
+  }
+  return out;
 }
 
 interface Props {
@@ -185,11 +322,22 @@ function NodeView({
   p,
   info,
   isTarget,
+  inPath,
+  dimmed,
+  isHovered,
+  onHover,
   pal,
 }: {
   p: Positioned;
   info: ComponentSizing | undefined;
   isTarget: boolean;
+  /** Whole-path incident: soft halo on every node in the blast radius. */
+  inPath: boolean;
+  /** Hover focus active and this node is NOT part of the focused subgraph. */
+  dimmed: boolean;
+  /** This is the node the pointer is on (accent stroke emphasis). */
+  isHovered: boolean;
+  onHover: (name: string | null) => void;
   pal: Palette;
 }) {
   const { node, x, y } = p;
@@ -213,7 +361,12 @@ function NodeView({
     .join(" · ");
 
   return (
-    <g>
+    <g
+      opacity={dimmed ? 0.22 : 1}
+      style={{ transition: "opacity 160ms ease" }}
+      onMouseEnter={() => onHover(p.node.name)}
+      onMouseLeave={() => onHover(null)}
+    >
       <title>{tooltip}</title>
       {isTarget ? (
         <>
@@ -243,6 +396,19 @@ function NodeView({
             className="eleven-target-ring"
           />
         </>
+      ) : inPath ? (
+        // blast radius, not the victim: halo only, no ring
+        <rect
+          x={x - 5}
+          y={y - 5}
+          width={NODE_W + 10}
+          height={NODE_H + 10}
+          rx={14}
+          fill="none"
+          stroke={pal.accent}
+          strokeOpacity={0.1}
+          strokeWidth={3}
+        />
       ) : null}
 
       <rect
@@ -252,9 +418,9 @@ function NodeView({
         height={NODE_H}
         rx={10}
         fill={sev ? sev.soft : pal.nodeBase}
-        stroke={sev ? sev.color : pal.nodeStroke}
-        strokeOpacity={sev ? 0.4 : 1}
-        strokeWidth={1}
+        stroke={isHovered ? pal.accent : sev ? sev.color : pal.nodeStroke}
+        strokeOpacity={isHovered ? 1 : sev ? 0.4 : 1}
+        strokeWidth={isHovered ? 1.6 : 1}
       />
       <rect
         x={x + 9}
@@ -337,11 +503,11 @@ function NodeView({
  */
 export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }: Props) {
   const { theme } = useTheme();
+  const [hovered, setHovered] = useState<string | null>(null);
   const pal = PALETTES[theme];
   const positioned = layout(nodes, edges);
   if (positioned.length === 0) return null;
 
-  const byName = new Map(positioned.map((p) => [p.node.name, p] as const));
   const colCounts = new Map<number, number>();
   for (const p of positioned) colCounts.set(p.col, (colCounts.get(p.col) ?? 0) + 1);
   const maxCol = Math.max(...colCounts.keys());
@@ -350,6 +516,27 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
   const height = PAD * 2 + maxColNodes * NODE_H + Math.max(0, maxColNodes - 1) * GAP_Y;
 
   const flagged = new Set(targetNames);
+  const edgeGeoms = computeEdges(positioned, edges);
+
+  const edgeKey = (e: TopologyEdge) => `${e.source}|${e.target}`;
+  const metaOf = new Map(edges.map((e) => [edgeKey(e), e] as const));
+  const colOf = new Map(positioned.map((p) => [p.node.name, p.col] as const));
+
+  // Hover focus: hovering a node keeps it, its direct neighbors, and the
+  // edges between them at full strength and fades everything else — the
+  // direct answer to "what is connected to what" in a dense graph.
+  const focusEdges = new Set<string>();
+  const focusNodes = new Set<string>();
+  if (hovered) {
+    focusNodes.add(hovered);
+    for (const e of edges) {
+      if (e.source === hovered || e.target === hovered) {
+        focusEdges.add(edgeKey(e));
+        focusNodes.add(e.source);
+        focusNodes.add(e.target);
+      }
+    }
+  }
 
   return (
     <div>
@@ -361,41 +548,39 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
           wholePath ? "whole path" : targetNames.join(", ") || "none"
         }`}
       >
-        <defs>
-          <marker
-            id="eleven-arrow"
-            viewBox="0 0 8 8"
-            refX="7"
-            refY="4"
-            markerWidth="7"
-            markerHeight="7"
-            orient="auto-start-reverse"
-          >
-            <path d="M0 0 8 4 0 8Z" fill={pal.edge} />
-          </marker>
-        </defs>
-
         {/* edges first, so nodes sit on top of the lines: a quiet base line
             plus a slow accent dash drifting source → target (the request
             flow) — motion that means "traffic is moving" */}
-        {edges.map((edge, i) => {
-          const s = byName.get(edge.source);
-          const t = byName.get(edge.target);
-          if (!s || !t) return null;
-          const x1 = s.x + NODE_W;
-          const y1 = s.y + NODE_H / 2;
-          const x2 = t.x;
-          const y2 = t.y + NODE_H / 2;
-          const dx = Math.max(24, (x2 - x1) / 2);
-          const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2 - 3} ${y2}`;
+        {edgeGeoms.map((g) => {
+          const meta = metaOf.get(g.key);
+          const long = meta
+            ? Math.abs((colOf.get(meta.target) ?? 0) - (colOf.get(meta.source) ?? 0)) > 1
+            : false;
+          const active = !hovered || focusEdges.has(g.key);
+          const emphasized = hovered !== null && focusEdges.has(g.key);
+          const dx = Math.max(24, Math.abs(g.x2 - g.x1) * 0.5);
+          const d = `M ${g.x1} ${g.y1} C ${g.x1 + dx} ${g.y1}, ${g.x2 - dx} ${g.y2}, ${g.x2} ${g.y2}`;
           return (
-            <g key={`${edge.source}-${edge.target}-${i}`}>
-              <path d={d} fill="none" stroke={pal.edge} strokeWidth={1.5} markerEnd="url(#eleven-arrow)" />
+            <g
+              key={g.key}
+              opacity={active ? (long ? 0.55 : 1) : 0.08}
+              style={{ transition: "opacity 160ms ease" }}
+            >
+              <title>
+                {meta ? `${meta.source} → ${meta.target} · p=${meta.probability}` : g.key}
+              </title>
+              <path
+                d={d}
+                fill="none"
+                stroke={emphasized ? pal.accent : pal.edge}
+                strokeOpacity={emphasized ? 0.9 : 1}
+                strokeWidth={emphasized ? 2 : long ? 1.1 : 1.5}
+              />
               <path
                 d={d}
                 fill="none"
                 stroke={pal.accent}
-                strokeOpacity={0.45}
+                strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
                 strokeWidth={1.5}
                 strokeLinecap="round"
                 strokeDasharray="4 10"
@@ -405,9 +590,22 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
           );
         })}
 
-        {positioned.map((p) => (
-          <NodeView key={p.node.name} p={p} info={sizing[p.node.name]} isTarget={flagged.has(p.node.name)} pal={pal} />
-        ))}
+        {positioned.map((p) => {
+          const name = p.node.name;
+          return (
+            <NodeView
+              key={name}
+              p={p}
+              info={sizing[name]}
+              isTarget={flagged.has(name)}
+              inPath={wholePath}
+              dimmed={hovered !== null && !focusNodes.has(name)}
+              isHovered={hovered === name}
+              onHover={setHovered}
+              pal={pal}
+            />
+          );
+        })}
       </svg>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-ink-dim">
@@ -425,7 +623,7 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
           incident target
         </span>
         <span className="ml-auto hidden font-mono text-[10px] sm:inline">
-          bar = mean utilization · hover a node for detail
+          bar = mean utilization · hover a node to trace its connections
         </span>
       </div>
     </div>

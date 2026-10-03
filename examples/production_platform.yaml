@@ -1,0 +1,204 @@
+# ============================================================================
+# Eleven example: "Production platform" — a full e-commerce + data pipeline
+#
+#   15 nodes, 5 tiers:
+#
+#     edge-lb ──> api-gateway ──┬─> auth-svc ──> session-cache ──> users-db
+#                               ├─> catalog-svc ─> catalog-cache ─> catalog-db
+#                               ├─> cart-svc ────┬──────────────────> orders-db
+#                               └─> checkout-svc┼─> payments-api (Stripe-like)
+#                                               ├─> fraud-api      (3rd party)
+#                                               ├─> orders-db
+#                                               └─> event-queue ──> bigquery
+#
+#   Real-world shapes included:
+#     * service mesh: 5 app services behind one API gateway
+#     * two caches with different hit rates (sessions vs catalog)
+#     * three databases (users / catalog / orders) — orders-db is the weak link
+#     * event-queue (Kafka-like) fanning into bigquery (streaming ingest)
+#     * two external third-party hops (payments + fraud) — the cascade victims
+#
+#   Cost model: cost_per_hour is a PER-SLOT rate and the bill scales with
+#   max_capacity (provisioned) + in_use + queue (metered) — so the
+#   extrapolated bill is a plausible small production platform, ~$10k/mo.
+#
+#   Upload it in the UI (Import page) or run it in the CLI:
+#     python -m sim_core run examples/production_platform.yaml
+#     python -m sim_core run examples/production_platform.yaml --playbook db_failover
+# ============================================================================
+
+seed: 42                    # fixed seed => reproducible results
+duration: 120.0             # total simulated seconds
+metrics_interval: 2.0       # sample utilization every 2 s
+sla_target: 8.0             # seconds; p95 above this fails the SLA
+
+topology:
+  nodes:
+    # ---- tier 0: edge -------------------------------------------------------
+    - name: edge-lb
+      role: load_balancer
+      max_capacity: 16
+      service_time: 0.15
+      cost_per_hour: 0.05
+
+    # ---- tier 1: API gateway ------------------------------------------------
+    - name: api-gateway
+      role: worker
+      max_capacity: 12
+      service_time: 0.35
+      timeout: 5.0
+      retry_limit: 2
+      retry_backoff: 0.3
+      cost_per_hour: 0.05
+
+    # ---- tier 2: application services ---------------------------------------
+    - name: auth-svc
+      role: worker
+      max_capacity: 8
+      service_time: 0.45
+      timeout: 4.0
+      retry_limit: 1
+      retry_backoff: 0.2
+      cost_per_hour: 0.05
+
+    - name: catalog-svc
+      role: worker
+      max_capacity: 10
+      service_time: 0.55
+      timeout: 5.0
+      retry_limit: 2
+      retry_backoff: 0.3
+      cost_per_hour: 0.05
+
+    - name: cart-svc
+      role: worker
+      max_capacity: 8
+      service_time: 0.5
+      timeout: 4.0
+      retry_limit: 2
+      retry_backoff: 0.2
+      cost_per_hour: 0.05
+
+    - name: checkout-svc
+      role: worker
+      max_capacity: 8
+      service_time: 0.85
+      timeout: 8.0
+      retry_limit: 1
+      retry_backoff: 0.5
+      cost_per_hour: 0.06
+
+    # ---- tier 3: caches -----------------------------------------------------
+    - name: session-cache
+      role: cache
+      max_capacity: 16
+      service_time: 0.04
+      hit_rate: 0.85
+      cost_per_hour: 0.035
+
+    - name: catalog-cache
+      role: cache
+      max_capacity: 16
+      service_time: 0.03
+      hit_rate: 0.9
+      cost_per_hour: 0.035
+
+    # ---- tier 3: data stores (orders-db is the deliberate weak link) --------
+    - name: users-db
+      role: database
+      max_capacity: 8
+      service_time: 0.7
+      timeout: 6.0
+      retry_limit: 2
+      retry_backoff: 0.4
+      cost_per_hour: 0.20
+
+    - name: catalog-db
+      role: database
+      max_capacity: 8
+      service_time: 0.9
+      timeout: 6.0
+      retry_limit: 2
+      retry_backoff: 0.4
+      cost_per_hour: 0.20
+
+    - name: orders-db
+      role: database
+      max_capacity: 6
+      service_time: 1.1
+      timeout: 8.0
+      retry_limit: 2
+      retry_backoff: 0.5
+      cost_per_hour: 0.25
+
+    # ---- tier 3: event pipeline ---------------------------------------------
+    - name: event-queue
+      role: generic            # Kafka-like broker: durable, cheap per slot
+      max_capacity: 24
+      service_time: 0.08
+      cost_per_hour: 0.08
+
+    - name: bigquery
+      role: generic            # streaming ingest into the warehouse
+      max_capacity: 32
+      service_time: 0.7
+      cost_per_hour: 0.10
+
+    # ---- tier 3: third-party (fixed by the provider, not by us) -------------
+    - name: payments-api
+      role: external_api       # Stripe-like: billed per transaction, not per slot
+      max_capacity: 20
+      service_time: 1.4
+      cost_per_hour: 0.0
+
+    - name: fraud-api
+      role: external_api       # fraud-scoring SaaS
+      max_capacity: 12
+      service_time: 1.8
+      cost_per_hour: 0.0
+
+  edges:
+    # entry
+    - { source: edge-lb,       target: api-gateway,    probability: 1.0 }
+
+    # gateway routing: auth on every request, then the route split
+    - { source: api-gateway,   target: auth-svc,       probability: 1.0 }
+    - { source: api-gateway,   target: catalog-svc,    probability: 0.55 }
+    - { source: api-gateway,   target: cart-svc,       probability: 0.35 }
+    - { source: api-gateway,   target: checkout-svc,   probability: 0.30 }
+
+    # auth: session cache first, miss falls through to users-db
+    - { source: auth-svc,      target: session-cache,  probability: 1.0 }
+    - { source: session-cache, target: users-db,       probability: 1.0 }
+
+    # catalog: cache first, miss falls through to catalog-db
+    - { source: catalog-svc,   target: catalog-cache,  probability: 1.0 }
+    - { source: catalog-cache, target: catalog-db,     probability: 1.0 }
+    - { source: catalog-svc,   target: event-queue,    probability: 0.15 }   # clickstream
+
+    # cart: line items from orders-db, session state in cache, cart events
+    - { source: cart-svc,      target: orders-db,      probability: 0.6 }
+    - { source: cart-svc,      target: session-cache,  probability: 0.4 }
+    - { source: cart-svc,      target: event-queue,    probability: 0.2 }
+
+    # checkout: the critical path — db write, third-party calls, order event
+    - { source: checkout-svc,  target: orders-db,      probability: 1.0 }
+    - { source: checkout-svc,  target: payments-api,   probability: 0.85 }
+    - { source: checkout-svc,  target: fraud-api,      probability: 0.85 }
+    - { source: checkout-svc,  target: event-queue,    probability: 1.0 }
+
+    # data pipeline: every queued event lands in the warehouse
+    - { source: event-queue,   target: bigquery,       probability: 1.0 }
+
+traffic:
+  base_rps: 5.0
+  duration: 120.0
+  spike_rps: 12.0             # flash-sale / promo hit
+  spike_start: 60.0
+  spike_duration: 25.0
+
+# Chaos is appended server-side by the playbooks:
+#   db_failover                  -> users-db, catalog-db, orders-db
+#   cross_region_latency_spike   -> whole path
+#   cache_eviction_storm         -> session-cache, catalog-cache
+#   dependency_timeout_cascade   -> payments-api, fraud-api (+ latency tail)

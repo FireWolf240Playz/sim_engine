@@ -1,0 +1,266 @@
+# ============================================================================
+# Eleven test topology: "Microservice platform" — a 20-node e-commerce stack
+#
+# Purpose: exercise the topology-diagram renderer with a *rich* graph that
+#   * spans all six roles (load_balancer, worker, cache, database,
+#     external_api, generic) so every node style is painted,
+#   * has fan-out (api-gateway, order-service), fan-in (catalog-db, order-db,
+#     analytics-db), and cross-edges (cart -> catalog, payment -> order-db),
+#   * is a DAG (no cycles) with a deep chain (lb -> waf -> gateway -> ...).
+#
+#   edge-lb -> waf -> api-gateway ─┬─> auth-service    -> auth-cache    -> user-db
+#                                   ├─> catalog-service -> catalog-cache -> catalog-db
+#                                   ├─> search-service  -> search-index  > catalog-db
+#                                   └─> cart-service ──┬─> order-service ─┬─> order-db
+#                          (price check)> catalog-service              ├─> payment-service ─┬─> payment-gateway
+#                                                                  (record)                └─> order-db
+#                                                                       ├─> analytics-db
+#                                                                       └─> notification-service
+#                                                                            -> email-queue -> email-worker -> analytics-db
+#
+# What this scenario demonstrates:
+#   * every role + every node style shows up in the diagram at once
+#   * order-db is the deliberate weak link (capacity 5, slow, small RDS)
+#   * a flash-sale spike (12 rps) at t=50 pushes the DB tier past its limit
+#   * chaos targets the DB + a cache + the network to light up the incident
+#     overlays on top of the diagram
+#
+# Run it:
+#   python -m sim_core run examples/microservice_platform.yaml
+#   python -m sim_core run examples/microservice_platform.yaml --report out.png
+# ============================================================================
+
+seed: 20261003          # fixed seed => reproducible results
+duration: 120.0         # total simulated seconds
+metrics_interval: 2.0   # sample utilisation every 2 s
+sla_target: 8.0         # seconds; flagged in the report when p95 exceeds it
+
+topology:
+  nodes:
+    # ---- edge / security layer -------------------------------------------
+    - name: edge-lb
+      role: load_balancer
+      max_capacity: 64
+      service_time: 0.05
+      cost_per_hour: 0.12
+
+    - name: waf
+      role: generic                # web-application-firewall hop
+      max_capacity: 48
+      service_time: 0.08
+      cost_per_hour: 0.05
+
+    # ---- gateway ----------------------------------------------------------
+    - name: api-gateway
+      role: worker
+      max_capacity: 32
+      service_time: 0.15
+      timeout: 5.0
+      retry_limit: 2
+      retry_backoff: 0.2
+      cost_per_hour: 0.10
+
+    # ---- core business services ------------------------------------------
+    - name: auth-service
+      role: worker
+      max_capacity: 16
+      service_time: 0.30
+      timeout: 4.0
+      retry_limit: 1
+      cost_per_hour: 0.07
+
+    - name: catalog-service
+      role: worker
+      max_capacity: 20
+      service_time: 0.40
+      timeout: 5.0
+      retry_limit: 2
+      cost_per_hour: 0.08
+
+    - name: search-service
+      role: worker
+      max_capacity: 12
+      service_time: 0.60
+      timeout: 6.0
+      retry_limit: 1
+      cost_per_hour: 0.09
+
+    - name: cart-service
+      role: worker
+      max_capacity: 14
+      service_time: 0.35
+      timeout: 4.0
+      retry_limit: 1
+      cost_per_hour: 0.07
+
+    # ---- caches (hit stops the branch; miss falls through to a DB) --------
+    - name: auth-cache
+      role: cache
+      max_capacity: 40
+      service_time: 0.03
+      hit_rate: 0.92
+      cost_per_hour: 0.04
+
+    - name: catalog-cache
+      role: cache
+      max_capacity: 48
+      service_time: 0.04
+      hit_rate: 0.85
+      cost_per_hour: 0.05
+
+    - name: search-index
+      role: cache                  # search index (Elasticsearch-style)
+      max_capacity: 24
+      service_time: 0.12
+      hit_rate: 0.80
+      cost_per_hour: 0.08
+
+    # ---- databases --------------------------------------------------------
+    - name: user-db
+      role: database
+      max_capacity: 8
+      service_time: 0.80
+      timeout: 10.0
+      retry_limit: 3
+      retry_backoff: 0.5
+      cost_per_hour: 0.18
+
+    - name: catalog-db
+      role: database
+      max_capacity: 6
+      service_time: 1.20
+      timeout: 10.0
+      retry_limit: 3
+      retry_backoff: 0.5
+      cost_per_hour: 0.22
+
+    - name: order-db
+      role: database               # deliberate weak link: small, slow RDS
+      max_capacity: 5
+      service_time: 1.50
+      timeout: 12.0
+      retry_limit: 3
+      retry_backoff: 0.6
+      cost_per_hour: 0.25
+
+    - name: analytics-db
+      role: database
+      max_capacity: 10
+      service_time: 0.60
+      cost_per_hour: 0.15
+
+    # ---- transactional services ------------------------------------------
+    - name: order-service
+      role: worker
+      max_capacity: 12
+      service_time: 0.50
+      timeout: 8.0
+      retry_limit: 2
+      cost_per_hour: 0.09
+
+    - name: payment-service
+      role: worker
+      max_capacity: 10
+      service_time: 0.70
+      timeout: 8.0
+      retry_limit: 2
+      cost_per_hour: 0.08
+
+    - name: notification-service
+      role: worker
+      max_capacity: 8
+      service_time: 0.40
+      timeout: 6.0
+      cost_per_hour: 0.05
+
+    # ---- external + async -------------------------------------------------
+    - name: payment-gateway
+      role: external_api           # third-party hop (Stripe/PayPal): slow
+      max_capacity: 8
+      service_time: 1.80
+      timeout: 10.0
+      retry_limit: 1
+      cost_per_hour: 0.0
+
+    - name: email-queue
+      role: generic                # SQS/SNS message queue
+      max_capacity: 24
+      service_time: 0.10
+      cost_per_hour: 0.02
+
+    - name: email-worker
+      role: worker
+      max_capacity: 8
+      service_time: 0.50
+      cost_per_hour: 0.05
+
+  edges:
+    # edge -> gateway
+    - { source: edge-lb,        target: api-gateway,   probability: 1.0 }
+    # (waf sits on the way: edge-lb -> waf -> api-gateway)
+    - { source: edge-lb,        target: waf,           probability: 1.0 }
+    - { source: waf,            target: api-gateway,   probability: 1.0 }
+
+    # gateway fans out to the business services (each followed independently)
+    - { source: api-gateway,    target: auth-service,  probability: 0.9 }
+    - { source: api-gateway,    target: catalog-service, probability: 0.6 }
+    - { source: api-gateway,    target: search-service,  probability: 0.35 }
+    - { source: api-gateway,    target: cart-service,    probability: 0.45 }
+
+    # auth path
+    - { source: auth-service,   target: auth-cache,    probability: 1.0 }
+    - { source: auth-cache,     target: user-db,       probability: 1.0 }   # miss
+
+    # catalog path
+    - { source: catalog-service, target: catalog-cache, probability: 1.0 }
+    - { source: catalog-cache,   target: catalog-db,    probability: 1.0 }  # miss
+
+    # search path (index miss refreshes from the catalog store)
+    - { source: search-service, target: search-index,  probability: 1.0 }
+    - { source: search-index,   target: catalog-db,    probability: 1.0 }   # miss
+
+    # cart / checkout path
+    - { source: cart-service,   target: order-service, probability: 0.7 }
+    - { source: cart-service,   target: catalog-service, probability: 0.3 } # price check
+
+    # order fan-out
+    - { source: order-service,  target: order-db,      probability: 1.0 }
+    - { source: order-service,  target: payment-service, probability: 0.8 }
+    - { source: order-service,  target: analytics-db,  probability: 0.5 }   # event write
+    - { source: order-service,  target: notification-service, probability: 0.6 }
+
+    # payment
+    - { source: payment-service, target: payment-gateway, probability: 1.0 } # external
+    - { source: payment-service, target: order-db,        probability: 0.4 } # record
+
+    # async notification fan-out
+    - { source: notification-service, target: email-queue, probability: 1.0 }
+    - { source: email-queue,          target: email-worker, probability: 1.0 }
+    - { source: email-worker,         target: analytics-db, probability: 0.3 }
+
+  entry_node: edge-lb
+
+traffic:
+  base_rps: 4.0             # sustained request rate
+  duration: 120.0
+  spike_rps: 12.0           # flash sale at t=50 (3x)
+  spike_start: 50.0
+  spike_duration: 20.0
+
+chaos:
+  - event_type: component_failure
+    target: order-db        # hammer the weak link during the spike
+    intensity: 0.5
+    start_time: 70.0
+    interval: 60.0
+    duration: 15.0
+  - event_type: network_latency
+    intensity: 0.5          # 1.5x service times across the board
+    start_time: 90.0
+    interval: 60.0
+    duration: 10.0
+  - event_type: cache_outage
+    intensity: 1.0          # fully disable the caches -> every lookup hits a DB
+    start_time: 105.0
+    interval: 60.0
+    duration: 8.0
