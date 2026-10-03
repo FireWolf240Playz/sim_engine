@@ -17,3 +17,5 @@ venv/
 summary.json
 *.png
 *.json
+
+docs/
