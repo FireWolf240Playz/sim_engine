@@ -1,5 +1,10 @@
 # Eleven — delivery plan
 
+> **Work past Phase 5 is tracked in [ROADMAP.md](ROADMAP.md)** — the
+> approved feature waves (Trust → Money → Liveness → SaaS → Engine depth →
+> Product face) with shapes, deps, and acceptance criteria. This file is
+> the historical delivery record.
+
 Five phases, in order. Each phase lands as a small, self-contained,
 test-verified increment; nothing in a later phase requires reworking an
 earlier one. Tier 2 items (see [BACKLOG.md](BACKLOG.md)) are explicitly

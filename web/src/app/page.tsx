@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
+import { ConfidencePanel } from "@/core/components/ConfidencePanel";
 import { SizingTable } from "@/core/components/SizingTable";
 import { StatCards } from "@/core/components/StatCards";
 import { TimelineChart } from "@/core/components/TimelineChart";
@@ -10,7 +11,12 @@ import { TopologyDiagram } from "@/core/components/TopologyDiagram";
 import { api } from "@/core/api/client";
 import { DEMO_META, playbookTargets } from "@/core/lib/demo";
 import { chaosWindows } from "@/core/lib/chaos";
-import { useRunState } from "@/core/state/RunStateContext";
+import { CONFIDENCE_SEEDS, useRunState, type RunMode } from "@/core/state/RunStateContext";
+
+const RUN_MODES: Array<{ mode: RunMode; label: string }> = [
+  { mode: "single", label: "Single run" },
+  { mode: "confidence", label: `${CONFIDENCE_SEEDS}-seed confidence` },
+];
 
 function EmptyState() {
   return (
@@ -44,6 +50,8 @@ export default function HomePage() {
     resetArchitecture,
     playbook,
     setPlaybook,
+    runMode,
+    setRunMode,
     requestRun,
     result,
     error,
@@ -89,6 +97,28 @@ export default function HomePage() {
               seed 42 · 60s run
             </span>
           )}
+          <div
+            role="group"
+            aria-label="Run mode"
+            className="flex items-center rounded-lg border border-line bg-surface-1 p-0.5"
+          >
+            {RUN_MODES.map(({ mode, label }) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setRunMode(mode)}
+                disabled={isPending}
+                aria-pressed={runMode === mode}
+                className={`h-8 rounded-md px-3 text-[13px] font-medium outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                  runMode === mode
+                    ? "bg-accent text-white shadow-card"
+                    : "text-ink-dim hover:text-ink"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={() => requestRun()}
@@ -112,6 +142,19 @@ export default function HomePage() {
       {error ? <ErrorState message={error} /> : null}
 
       <StatCards summary={result?.summary ?? null} context={context} />
+
+      {result?.profile ? (
+        <Panel
+          title="Confidence across seeds"
+          aside={
+            result.seeds && result.seeds.length > 0
+              ? `seeds ${result.seeds.join(" · ")}`
+              : undefined
+          }
+        >
+          <ConfidencePanel profile={result.profile} />
+        </Panel>
+      ) : null}
 
       {result && sizing ? (
         <>

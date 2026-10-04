@@ -74,6 +74,7 @@ from sim_core.config import (
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
 from sim_core.playbooks import PLAYBOOKS, Playbook, get_playbook, list_playbooks
+from sim_core.profile import resilience_profile, typical_index
 from sim_core.score import (
     cost_extrapolation,
     cost_grade,
@@ -122,6 +123,9 @@ __all__ = [
     "cost_per_completed_request",
     "score_headline",
     "score_color",
+    # Multi-seed confidence profile
+    "resilience_profile",
+    "typical_index",
     # Topology
     "Component",
     "Topology",

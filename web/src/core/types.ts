@@ -128,6 +128,41 @@ export interface SimulateResponse {
   /** Effective chaos schedule (config + appended playbook events). */
   chaos: ChaosEventCfg[];
   timeseries: TimelineTick[] | null;
+  /**
+   * Multi-seed confidence mode (roadmap 1.1) — present only when the run
+   * used `n_seeds > 1`; single-run responses omit these keys entirely.
+   */
+  seeds?: number[] | null;
+  /** One run per seed, in seed order. */
+  runs?: Array<{ seed: number; summary: Summary }> | null;
+  /** worst/typical/best across the seeds (see `sim_core/profile.py`). */
+  profile?: ResilienceProfile | null;
+}
+
+/** One metric's worst/typical/best (keys mirror `sim_core/profile.py`). */
+export interface ProfileTri {
+  resilience_score: number | null;
+  sla_compliance: number | null;
+  p95_latency: number | null;
+  cost_per_completed_request: number | null;
+}
+
+export interface ProfilePerRun {
+  seed: number | null;
+  score: number | null;
+  p95: number | null;
+  sla: number | null;
+  completion: number | null;
+}
+
+export interface ResilienceProfile {
+  n_runs: number;
+  seeds: (number | null)[] | null;
+  worst: ProfileTri;
+  typical: ProfileTri;
+  best: ProfileTri;
+  score_spread: number | null;
+  per_run: ProfilePerRun[];
 }
 
 export interface PlaybookInfo {

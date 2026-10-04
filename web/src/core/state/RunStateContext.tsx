@@ -14,6 +14,16 @@ import { DEMO_CONFIG } from "../lib/demo";
 import type { SimulateResponse, SimulationConfig } from "../types";
 
 /**
+ * How the next run executes (roadmap 1.1):
+ * - "single"      — one seed, the original headline number;
+ * - "confidence"  — 5 seeds, worst/typical/best confidence profile.
+ */
+export type RunMode = "single" | "confidence";
+
+/** How many seeds a confidence run fires (the "5-seed" in the toggle). */
+export const CONFIDENCE_SEEDS = 5;
+
+/**
  * One shared run across the app: the active architecture, the selected
  * incident, the active run, and its result. The Simulator view renders it;
  * the Incidents view drives it ("run this incident" sets the playbook,
@@ -39,6 +49,9 @@ interface RunStateValue {
   /** null = clean run; otherwise a playbook key. */
   playbook: string | null;
   setPlaybook: (playbook: string | null) => void;
+  /** single vs multi-seed confidence run; the next run respects it. */
+  runMode: RunMode;
+  setRunMode: (mode: RunMode) => void;
   /** Fire a run; pass a playbook to switch+run in one step. */
   requestRun: (playbook?: string | null) => void;
   result: SimulateResponse | null;
@@ -65,6 +78,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<SimulationConfig>(DEMO_CONFIG);
   const [architectureLabel, setArchitectureLabel] = useState<string>(DEMO_LABEL);
+  const [runMode, setRunMode] = useState<RunMode>("single");
 
   const setArchitecture = useCallback((next: SimulationConfig, label: string) => {
     setConfig(next);
@@ -77,7 +91,8 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const run = useMutation({
-    mutationFn: (pb: string | null) => api.simulate(config, pb),
+    mutationFn: (pb: string | null) =>
+      api.simulate(config, pb, runMode === "confidence" ? CONFIDENCE_SEEDS : 1),
     onSuccess: (data) => {
       setResult(data);
       setError(null);
@@ -106,12 +121,14 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       resetArchitecture,
       playbook,
       setPlaybook,
+      runMode,
+      setRunMode,
       requestRun,
       result,
       error,
       isPending: run.isPending,
     }),
-    [config, architectureLabel, setArchitecture, resetArchitecture, playbook, requestRun, result, error, run.isPending],
+    [config, architectureLabel, setArchitecture, resetArchitecture, playbook, runMode, requestRun, result, error, run.isPending],
   );
 
   return <RunStateContext.Provider value={value}>{children}</RunStateContext.Provider>;

@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from sim_core import (
     AppWorkerConfig,
@@ -24,7 +24,9 @@ from sim_core import (
     TrafficPattern,
     compare,
     render_report,
+    resilience_profile,
     score_headline,
+    typical_index,
 )
 from sim_core.playbooks import get_playbook, list_playbooks
 from sim_core.viz import render_comparison
@@ -218,6 +220,95 @@ def run_simulation(
 
 
 # ---------------------------------------------------------------------------
+# ``run --seeds N`` — multi-seed confidence profile (roadmap 1.1)
+# ---------------------------------------------------------------------------
+
+#: Metric rows of the profile table: (profile key, label, value formatter).
+_PROFILE_ROWS: List[tuple] = [
+    ("resilience_score", "Resilience", lambda v: f"{v:.1f}"),
+    ("p95_latency", "P95 latency (s)", lambda v: f"{v:.3f}"),
+    ("sla_compliance", "SLA compliance", lambda v: f"{v * 100:.1f}%"),
+    ("cost_per_completed_request", "Cost / request", lambda v: f"${v:.3f}"),
+]
+
+
+def _fmt_profile_cell(value: Optional[float], fmt: Callable[[float], str]) -> str:
+    """One profile table cell (``n/a`` when the run produced no value)."""
+    return "n/a" if value is None else fmt(value)
+
+
+def _format_profile(profile: Dict[str, Any]) -> str:
+    """Render the multi-seed confidence profile as a terminal block."""
+    seeds = profile.get("seeds") or []
+    lines = [
+        f"Eleven - multi-seed confidence profile ({profile['n_runs']} runs)",
+        "=" * 62,
+        f"Seeds ................... {', '.join(str(s) for s in seeds) if seeds else 'n/a'}",
+        "",
+        f"{'metric':<22}{'worst':>14}{'typical':>14}{'best':>14}",
+        "-" * 62,
+    ]
+    for key, label, fmt in _PROFILE_ROWS:
+        row = f"{label:<22}"
+        row += f"{_fmt_profile_cell(profile['worst'].get(key), fmt):>14}"
+        row += f"{_fmt_profile_cell(profile['typical'].get(key), fmt):>14}"
+        row += f"{_fmt_profile_cell(profile['best'].get(key), fmt):>14}"
+        lines.append(row)
+    spread = profile.get("score_spread")
+    lines.append("")
+    if spread is not None:
+        lines.append(f"Score spread (best - worst): {spread:.1f}")
+    lines.append(
+        "worst/best are per-metric extremes (for latency and cost, worst = the"
+    )
+    lines.append("slowest / most expensive run); typical is the median run.")
+    return "\n".join(lines)
+
+
+def run_multi_seed(
+    config: SimulationConfig,
+    n_seeds: int,
+    report_path: str,
+    json_path: str,
+) -> Dict[str, Any]:
+    """Run ``config`` once per seed and report the confidence profile.
+
+    Seeds are ``config.seed + 0..n-1`` (or 42 + 0..n-1 when the config has
+    no seed). Prints the worst/typical/best table, renders the report PNG
+    of the *typical* run (middle by resilience score), and writes
+    ``{seeds, profile, runs}`` JSON to ``json_path``.
+    """
+    if n_seeds < 1:
+        raise ValueError("--seeds must be >= 1")
+    base = config.seed if config.seed is not None else 42
+    seeds = [base + i for i in range(n_seeds)]
+
+    runs: List[Dict[str, Any]] = []
+    simulators: List[CloudSimulator] = []
+    for seed in seeds:
+        # SimulationConfig is frozen -> copy with the per-run seed.
+        run_config = config.model_copy(deep=True, update={"seed": seed})
+        simulator = CloudSimulator(run_config)
+        runs.append({"seed": seed, "summary": simulator.run()})
+        simulators.append(simulator)
+
+    summaries = [run["summary"] for run in runs]
+    profile = resilience_profile(summaries, seeds=seeds)
+    print(_format_profile(profile))
+
+    typical = typical_index(summaries)
+    png = render_report(simulators[typical].collector, output_path=report_path)
+    print(f"\nReport (typical run, seed {runs[typical]['seed']}) written to: {png}")
+
+    payload: Dict[str, Any] = {"seeds": seeds, "profile": profile, "runs": runs}
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
+        fh.write("\n")
+    print(f"Profile JSON written to: {json_path}")
+    return payload
+
+
+# ---------------------------------------------------------------------------
 # ``eleven compare`` — multi-cloud / what-if / capacity sweep
 # ---------------------------------------------------------------------------
 
@@ -401,6 +492,17 @@ def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
         help=(
             "Append a built-in incident playbook to this run "
             "(see `eleven playbooks list`), e.g. db_failover."
+        ),
+    )
+    run_p.add_argument(
+        "--seeds",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Run N times with seeds seed+0..seed+N-1 (seed 42 base when the "
+            "config has none) and report the worst/typical/best confidence "
+            "profile instead of one run (default: 1)."
         ),
     )
 

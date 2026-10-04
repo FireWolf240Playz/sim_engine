@@ -65,10 +65,15 @@ export const api = {
 
   playbooks: () => request<PlaybookListResponse>("/playbooks"),
 
-  /** One full run: config in, summary + score + timeseries out. */
+  /**
+   * One full run: config in, summary + score + timeseries out.
+   * `nSeeds > 1` asks for the multi-seed confidence profile instead
+   * (roadmap 1.1) — the response then carries seeds/runs/profile.
+   */
   simulate: (
     config: SimulationConfig,
     playbook: string | null = null,
+    nSeeds = 1,
   ) =>
     request<SimulateResponse>("/simulate", {
       method: "POST",
@@ -77,6 +82,7 @@ export const api = {
         playbook,
         include_timeseries: true,
         include_report_png: false,
+        ...(nSeeds > 1 ? { n_seeds: nSeeds } : {}),
       }),
     }),
 

@@ -26,12 +26,34 @@ class SimulateRequest(BaseModel):
     ``include_timeseries`` returns the per-tick timeline (p50/p95 latency
     windows + per-component utilisation) so the frontend can draw the
     latency-vs-chaos timeline from one response.
+
+    Multi-seed confidence (roadmap 1.1): ``n_seeds > 1`` runs the engine
+    once per seed (seed = ``config.seed`` + i, or 42 + i when the config
+    has no seed) and the response carries ``seeds`` / ``runs`` /
+    ``profile`` in addition to ``summary`` (the typical run's). An
+    explicit ``seeds`` list overrides ``n_seeds`` when both are given.
+    ``n_seeds == 1`` (the default) leaves the response shape unchanged.
     """
 
     config: SimulationConfig
     playbook: str | None = None
     include_report_png: bool = False
     include_timeseries: bool = False
+    n_seeds: int = Field(
+        1,
+        ge=1,
+        le=20,
+        description=(
+            "How many seeds to run (1 = single run, default). Seeds are "
+            "config.seed + 0..n-1, or 42 + 0..n-1 when the config has no seed."
+        ),
+    )
+    seeds: list[int] | None = Field(
+        None,
+        min_length=1,
+        max_length=20,
+        description="Explicit seed list; wins over n_seeds when both are set.",
+    )
 
 
 class SimulateResponse(BaseModel):
@@ -41,12 +63,22 @@ class SimulateResponse(BaseModel):
     plus any playbook events appended server-side — so a frontend can derive
     chaos windows from the response alone. ``timeseries`` is present only
     when ``include_timeseries`` was requested.
+
+    Multi-seed confidence runs (``n_seeds > 1`` or explicit ``seeds``) add
+    three optional keys — ``seeds``, ``runs`` (one ``{seed, summary}`` per
+    run) and ``profile`` (worst/typical/best, see :mod:`sim_core.profile`) —
+    and set ``summary`` to the typical run's. Single-run responses omit
+    them entirely (``response_model_exclude_unset`` keeps the byte shape
+    identical to the pre-1.1 contract).
     """
 
     summary: dict[str, Any]
     report_png_b64: str | None = None
     chaos: list[dict[str, Any]] = Field(default_factory=list)
     timeseries: list[dict[str, Any]] | None = None
+    seeds: list[int] | None = None
+    runs: list[dict[str, Any]] | None = None
+    profile: dict[str, Any] | None = None
 
 
 class CompareRequest(BaseModel):

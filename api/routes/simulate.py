@@ -4,6 +4,13 @@ The single most important endpoint: it runs one full simulation and
 returns the complete ``summary()`` dict (resilience score, cost grade,
 cost split, extrapolations all included), optionally with the rendered
 report PNG as base64. Stateless: the request body is the entire input.
+
+Multi-seed confidence (roadmap 1.1): ``n_seeds > 1`` (or an explicit
+``seeds`` list) runs the engine once per seed and adds ``seeds`` /
+``runs`` / ``profile`` to the response, with ``summary`` set to the
+typical run's (middle by resilience score, see
+:func:`sim_core.profile.typical_index`). Single-run responses omit those
+keys entirely — the contract is byte-identical to the pre-1.1 shape.
 """
 
 from __future__ import annotations
@@ -11,26 +18,32 @@ from __future__ import annotations
 import base64
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
 from api.schemas import SimulateRequest, SimulateResponse
-from sim_core import CloudSimulator
+from sim_core import CloudSimulator, resilience_profile, typical_index
 from sim_core.playbooks import get_playbook
 
 router = APIRouter(tags=["simulate"])
 
 
-@router.post("/simulate", response_model=SimulateResponse)
+@router.post(
+    "/simulate",
+    response_model=SimulateResponse,
+    response_model_exclude_unset=True,
+)
 def simulate(payload: SimulateRequest) -> dict[str, Any]:
-    """Run one simulation and return its full summary dict.
+    """Run the simulation and return its full summary dict.
 
     - Unknown ``playbook`` → 404.
     - Invalid ``config`` → 422 (FastAPI validates :class:`SimulationConfig`).
     - ``include_report_png`` renders the report to a temp file and returns
       the PNG bytes base64-encoded (the engine's :func:`render_report` API
       is unchanged).
+    - ``n_seeds > 1`` (or explicit ``seeds``) → one run per seed plus the
+      worst/typical/best profile; ``summary`` is the typical run's.
     """
     config = payload.config
     if payload.playbook is not None:
@@ -49,17 +62,69 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
                 detail=f"playbook {payload.playbook!r} cannot apply to this topology: {exc}",
             ) from exc
 
+    seed_list = _resolve_seed_list(payload, config.seed)
+    if seed_list is None:
+        return _single_run_response(config, payload.include_report_png, payload.include_timeseries)
+
+    runs: List[dict[str, Any]] = []
+    for seed in seed_list:
+        # SimulationConfig is frozen → copy with the per-run seed. Deep so
+        # no nested config state is shared between runs.
+        run_config = config.model_copy(deep=True, update={"seed": seed})
+        runs.append({"seed": seed, "summary": CloudSimulator(run_config).run()})
+
+    summaries = [run["summary"] for run in runs]
+    return {
+        "seeds": seed_list,
+        "runs": runs,
+        "profile": resilience_profile(summaries, seeds=seed_list),
+        # Shared across runs: the effective schedule (config + playbook).
+        "chaos": [event.model_dump(mode="json") for event in config.chaos],
+        # The typical run (middle by resilience score) is the headline.
+        "summary": summaries[typical_index(summaries)],
+    }
+
+
+def _resolve_seed_list(
+    payload: SimulateRequest, config_seed: Optional[int]
+) -> Optional[List[int]]:
+    """The explicit seed list for a multi-seed request, or ``None`` for a
+    single run.
+
+    An explicit ``seeds`` list always wins (documented on the schema).
+    Otherwise ``n_seeds > 1`` derives ``base + 0..n-1`` where ``base`` is
+    the config's seed, or 42 when the config has none (a ``None`` seed
+    would otherwise draw from entropy and break the arithmetic).
+    """
+    if payload.seeds is not None:
+        return list(payload.seeds)
+    if payload.n_seeds > 1:
+        base = config_seed if config_seed is not None else 42
+        return [base + i for i in range(payload.n_seeds)]
+    return None
+
+
+def _single_run_response(
+    config: Any, include_report_png: bool, include_timeseries: bool
+) -> dict[str, Any]:
+    """One run, the original response shape (unchanged by 1.1).
+
+    Returns exactly the four original keys — ``summary``,
+    ``report_png_b64``, ``chaos``, ``timeseries`` — so with
+    ``response_model_exclude_unset`` the serialized body is byte-identical
+    to the pre-1.1 contract.
+    """
     simulator = CloudSimulator(config)
     summary = simulator.run()
 
     report_png_b64: str | None = None
-    if payload.include_report_png:
+    if include_report_png:
         with tempfile.TemporaryDirectory(prefix="eleven_api_") as tmp:
             out_path = render_report_to_temp(simulator.collector, tmp)
             report_png_b64 = base64.b64encode(Path(out_path).read_bytes()).decode("ascii")
 
     timeseries: list[dict[str, Any]] | None = None
-    if payload.include_timeseries:
+    if include_timeseries:
         timeseries = simulator.collector.timeseries()
 
     return {
