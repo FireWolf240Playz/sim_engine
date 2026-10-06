@@ -43,10 +43,29 @@ export const SEVERITY_BG: Record<Severity, string> = {
   crit: "bg-sev-crit",
 };
 
-export const SEVERITY_HEX: Record<Severity, string> = {
-  ok: "#2fbf71",
-  warn: "#e8a13a",
-  crit: "#e5484d",
+/**
+ * SVG equivalents of the three maps above. Inside an `<svg>` the colour
+ * has to land on `fill`/`stroke` rather than `color`/`background`, and
+ * these utilities resolve to the very same CSS variables — so an SVG
+ * surface follows a theme flip without the component holding a single
+ * hex value of its own.
+ */
+export const SEVERITY_FILL: Record<Severity, string> = {
+  ok: "fill-sev-ok",
+  warn: "fill-sev-warn",
+  crit: "fill-sev-crit",
+};
+
+export const SEVERITY_FILL_SOFT: Record<Severity, string> = {
+  ok: "fill-sev-ok-soft",
+  warn: "fill-sev-warn-soft",
+  crit: "fill-sev-crit-soft",
+};
+
+export const SEVERITY_STROKE: Record<Severity, string> = {
+  ok: "stroke-sev-ok",
+  warn: "stroke-sev-warn",
+  crit: "stroke-sev-crit",
 };
 
 /** Colorblind-safe word per severity — color is never the sole signal. */
@@ -66,12 +85,24 @@ export function fmtPct(fraction: number | null | undefined, digits = 0): string 
   return `${(fraction * 100).toFixed(digits)}%`;
 }
 
-/** Compact money: `31536000 -> "$31.5M"`, `1517 -> "$1.5k"`. */
+/**
+ * Compact money: `31536000 -> "$31.5M"`, `1517 -> "$1.5k"`,
+ * `0.42 -> "$0.42"`, `0.004 -> "<$0.01"`.
+ *
+ * The sub-dollar branches matter: a simulation run is seconds long, so
+ * per-run costs and their deltas are usually fractions of a dollar.
+ * Rounding those to whole dollars made every such figure read "$0".
+ */
 export function fmtMoney(value: number | null | undefined): string {
   if (value === null || value === undefined) return "$0";
-  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `$${(value / 1_000).toFixed(1)}k`;
-  return `$${value.toFixed(0)}`;
+  const magnitude = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (magnitude >= 1_000_000) return `${sign}$${(magnitude / 1_000_000).toFixed(1)}M`;
+  if (magnitude >= 1_000) return `${sign}$${(magnitude / 1_000).toFixed(1)}k`;
+  if (magnitude >= 1) return `${sign}$${magnitude.toFixed(0)}`;
+  if (magnitude === 0) return "$0";
+  if (magnitude < 0.01) return `${sign}<$0.01`;
+  return `${sign}$${magnitude.toFixed(2)}`;
 }
 
 export function fmtMoneyFull(value: number | null | undefined): string {

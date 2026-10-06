@@ -12,15 +12,23 @@
   severity values, the same violet accent lifted for contrast.
 
   Every utility (bg-surface-1, text-ink, border-line, shadow-card,
-  ...) resolves to these CSS variables, so the
+  fill-sev-ok, stroke-edge, ...) resolves to these CSS variables, so the
   `html[data-theme="dark"]` block below re-skins the whole app —
-  components never hardcode a theme color.
+  components never hardcode a theme color. SVG-heavy components use the
+  generated fill and stroke utilities; the one consumer that needs real
+  color strings (Recharts) reads these same variables at runtime via
+  `core/lib/useThemeTokens`. There is exactly one source of truth.
+
+  `@theme static` (rather than plain `@theme`) guarantees every token is
+  emitted as a CSS variable on :root even when no utility happens to
+  reference it — which is what the runtime reader depends on.
 */
-@theme {
+@theme static {
   --color-surface-0: #f6f7fa; /* canvas */
   --color-surface-1: #ffffff; /* cards / panels / sidebar */
   --color-surface-2: #edeff5; /* hover / segmented track / raised */
   --color-line: #e4e7ee; /* hairlines, table rules */
+  --color-edge: #c6cdda; /* topology connector lines */
   --color-ink: #171a21; /* primary text */
   --color-ink-dim: #667085; /* secondary text */
   --color-accent: #6d5df0; /* interactive: RUN, active, focus */
@@ -37,6 +45,21 @@
     0 1px 2px rgb(23 26 33 / 0.04), 0 1px 3px rgb(23 26 33 / 0.06);
 }
 
+/*
+  `dark:` variant bound to the data-theme attribute rather than
+  `prefers-color-scheme`, so it agrees with the theme store. Needed by
+  the few SVG surfaces whose light and dark values are different tokens
+  rather than the same token re-defined (a chip that is surface-1 on
+  light and surface-2 on dark).
+*/
+@custom-variant dark (&:where([data-theme="dark"] *, [data-theme="dark"]));
+
+/* Non-color tokens, declared outside @theme because they back no
+   utility — only the runtime reader consumes them. */
+:root {
+  --chart-grid-opacity: 0.9;
+}
+
 /* Dark theme: override the same variables. Author CSS outside
    @layer theme wins over the @theme declarations, and every
    utility reads the variable at use-time, so one attribute on
@@ -47,6 +70,7 @@ html[data-theme="dark"] {
   --color-surface-1: #151d2e;
   --color-surface-2: #1b2436;
   --color-line: #26334d;
+  --color-edge: #33415e;
   --color-ink: #e8edf5;
   --color-ink-dim: #8b96ac;
   --color-accent: #8b7bff;
@@ -59,6 +83,7 @@ html[data-theme="dark"] {
   --color-sev-crit: #e5484d;
   --color-sev-crit-soft: #e5484d26;
   --shadow-card: 0 1px 2px rgb(0 0 0 / 0.25);
+  --chart-grid-opacity: 0.5;
 }
 
 html {

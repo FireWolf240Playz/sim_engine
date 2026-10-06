@@ -6,76 +6,64 @@ import type { ComponentRole, ComponentSizing, TopologyEdge, TopologyNode } from 
 import {
   SEVERITY_BG,
   SEVERITY_BORDER,
+  SEVERITY_FILL,
+  SEVERITY_FILL_SOFT,
+  SEVERITY_STROKE,
   fmtPct,
   sizingSeverity,
-  type Severity,
 } from "../lib/format";
-import { useTheme, type Theme } from "../state/ThemeContext";
+import {
+  NODE_H,
+  NODE_W,
+  canvasSize,
+  computeEdges,
+  edgeKey,
+  edgePath,
+  layout,
+  type Positioned,
+} from "../lib/graphLayout";
 
-const NODE_W = 160;
-const NODE_H = 64;
-const GAP_X = 56;
-const GAP_Y = 36;
-const PAD = 12;
+const MONO = "IBM Plex Mono, ui-monospace, monospace";
 
 /**
- * SVG presentation attributes can't read CSS variables, so the diagram
- * picks an explicit palette per theme (values mirror the tokens in
- * globals.css) and re-renders when the theme flips.
+ * Every color below is a Tailwind utility resolving to a CSS variable
+ * from globals.css — `fill-surface-1`, `stroke-edge`, `fill-sev-crit`.
+ * The diagram therefore carries no palette of its own and follows a
+ * theme flip through CSS alone, with no re-render and no second copy of
+ * the token values to keep in sync.
+ *
+ * The `dark:` variant (bound to `[data-theme="dark"]` in globals.css) is
+ * used only where light and dark genuinely want DIFFERENT tokens rather
+ * than the same token re-defined.
  */
-interface Palette {
-  nodeBase: string;
-  nodeStroke: string;
-  chipBg: string;
-  chipStroke: string;
-  nameInk: string;
-  dimInk: string;
-  accent: string;
-  edge: string;
-  track: { color: string; opacity: number };
-  sev: Record<Severity, { color: string; soft: string }>;
-}
-
-const PALETTES: Record<Theme, Palette> = {
-  light: {
-    nodeBase: "#ffffff",
-    nodeStroke: "#e4e7ee",
-    chipBg: "#ffffff",
-    chipStroke: "#e4e7ee",
-    nameInk: "#171a21",
-    dimInk: "#667085",
-    accent: "#6d5df0",
-    edge: "#c6cdda",
-    track: { color: "#ffffff", opacity: 0.7 },
-    sev: {
-      ok: { color: "#178a50", soft: "#e7f5ee" },
-      warn: { color: "#b26209", soft: "#fdf1de" },
-      crit: { color: "#d92d20", soft: "#fdeceb" },
-    },
-  },
-  dark: {
-    nodeBase: "#151d2e",
-    nodeStroke: "#26334d",
-    chipBg: "#1b2436",
-    chipStroke: "#26334d",
-    nameInk: "#e8edf5",
-    dimInk: "#8b96ac",
-    accent: "#8b7bff",
-    edge: "#33415e",
-    track: { color: "#0e1420", opacity: 0.7 },
-    sev: {
-      ok: { color: "#2fbf71", soft: "#2fbf7126" },
-      warn: { color: "#e8a13a", soft: "#e8a13a29" },
-      crit: { color: "#e5484d", soft: "#e5484d26" },
-    },
-  },
-};
+const SURFACE = {
+  card: "fill-surface-1",
+  cardStroke: "stroke-line",
+  chip: "fill-surface-1 dark:fill-surface-2",
+  chipStroke: "stroke-line",
+  name: "fill-ink",
+  dim: "fill-ink-dim",
+  dimStroke: "stroke-ink-dim",
+  accentStroke: "stroke-accent",
+  edge: "stroke-edge",
+  track: "fill-surface-1 dark:fill-surface-0",
+} as const;
 
 /** Role glyph (16×16 stroke icon) — shape, not color, carries the role. */
-function RoleGlyph({ role, x, y, color }: { role: ComponentRole; x: number; y: number; color: string }) {
+function RoleGlyph({
+  role,
+  x,
+  y,
+  strokeClass,
+}: {
+  role: ComponentRole;
+  x: number;
+  y: number;
+  strokeClass: string;
+}) {
   const stroke = {
+    className: strokeClass,
     fill: "none",
-    stroke: color,
     strokeWidth: 1.4,
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
@@ -98,7 +86,12 @@ function RoleGlyph({ role, x, y, color }: { role: ComponentRole; x: number; y: n
         <path d="M2 8c0 1.3 2.7 2.4 6 2.4s6-1.1 6-2.4" />
       </g>
     ),
-    external_api: <path d="M5 12.5h8a2.6 2.6 0 0 0 .4-5.2A4.3 4.3 0 0 0 5.3 5.8 3.3 3.3 0 0 0 5 12.5Z" {...stroke} />,
+    external_api: (
+      <path
+        d="M5 12.5h8a2.6 2.6 0 0 0 .4-5.2A4.3 4.3 0 0 0 5.3 5.8 3.3 3.3 0 0 0 5 12.5Z"
+        {...stroke}
+      />
+    ),
     generic: <path d="M8 1.2 14.3 4.6v6.8L8 14.8 1.7 11.4V4.6Z" {...stroke} />,
   };
   return <g transform={`translate(${x}, ${y})`}>{paths[role]}</g>;
@@ -106,200 +99,6 @@ function RoleGlyph({ role, x, y, color }: { role: ComponentRole; x: number; y: n
 
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-interface Positioned {
-  node: TopologyNode;
-  x: number;
-  y: number;
-  col: number;
-}
-
-/**
- * Column assignment, longest-path style: a node sits one column past its
- * DEEPEST source, so (almost) every edge spans exactly one column. The old
- * BFS "first discovery" depth let a node land left of one of its sources,
- * and those long multi-column diagonals were the main source of the choppy,
- * crossing connections. Kahn's topological order keeps it deterministic;
- * nodes stuck in a cycle fall back to their original order.
- */
-function assignColumns(nodes: TopologyNode[], edges: TopologyEdge[]): Map<string, number> {
-  const names = new Set(nodes.map((n) => n.name));
-  const valid = edges.filter(
-    (e) => names.has(e.source) && names.has(e.target) && e.source !== e.target,
-  );
-
-  const sources = new Map<string, string[]>();
-  const outgoing = new Map<string, string[]>();
-  const indegree = new Map<string, number>();
-  nodes.forEach((n) => indegree.set(n.name, 0));
-  for (const e of valid) {
-    sources.set(e.target, [...(sources.get(e.target) ?? []), e.source]);
-    outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e.target]);
-    indegree.set(e.target, (indegree.get(e.target) ?? 0) + 1);
-  }
-
-  const topo: string[] = [];
-  const placed = new Set<string>();
-  const queue = nodes.map((n) => n.name).filter((n) => (indegree.get(n) ?? 0) === 0);
-  while (queue.length) {
-    const name = queue.shift()!;
-    topo.push(name);
-    placed.add(name);
-    for (const t of outgoing.get(name) ?? []) {
-      const rest = (indegree.get(t) ?? 1) - 1;
-      indegree.set(t, rest);
-      if (rest === 0) queue.push(t);
-    }
-  }
-  for (const n of nodes) if (!placed.has(n.name)) topo.push(n.name);
-
-  const col = new Map<string, number>();
-  for (const name of topo) {
-    const srcs = sources.get(name) ?? [];
-    col.set(name, srcs.length ? Math.max(...srcs.map((s) => col.get(s) ?? 0)) + 1 : 0);
-  }
-  return col;
-}
-
-/**
- * Barycenter crossing reduction (Sugiyama-style): every column is re-sorted
- * by the mean position of its already-placed neighbors, sweeping
- * left→right then right→left over a few passes. This is what straightens
- * fan-outs into parallel, uncrossed curves — ties keep the original order,
- * so the result is deterministic for the same input.
- */
-function orderColumns(
-  columns: Map<number, TopologyNode[]>,
-  sources: Map<string, string[]>,
-  outgoing: Map<string, string[]>,
-): void {
-  const sortedCols = [...columns.keys()].sort((a, b) => a - b);
-  const pos = new Map<string, number>();
-  for (const c of sortedCols) columns.get(c)!.forEach((n, i) => pos.set(n.name, i));
-
-  const meanPos = (name: string, useSources: boolean): number => {
-    const neighbors = (useSources ? sources : outgoing).get(name) ?? [];
-    const idxs: number[] = [];
-    for (const n of neighbors) {
-      const p = pos.get(n);
-      if (p !== undefined) idxs.push(p);
-    }
-    return idxs.length ? idxs.reduce((a, b) => a + b, 0) / idxs.length : Number.POSITIVE_INFINITY;
-  };
-
-  for (let sweep = 0; sweep < 3; sweep += 1) {
-    for (const leftToRight of [true, false]) {
-      const cols = leftToRight ? sortedCols : [...sortedCols].reverse();
-      for (const c of cols) {
-        const colNodes = columns.get(c)!;
-        colNodes.sort((a, b) => meanPos(a.name, leftToRight) - meanPos(b.name, leftToRight));
-        colNodes.forEach((n, i) => pos.set(n.name, i));
-      }
-    }
-  }
-}
-
-/**
- * Layered graph layout: longest-path columns (so edges span one column),
- * barycenter ordering inside each column (so edges barely cross), and
- * columns centering vertically on a shared centerline.
- */
-function layout(nodes: TopologyNode[], edges: TopologyEdge[]): Positioned[] {
-  const col = assignColumns(nodes, edges);
-
-  const columns = new Map<number, TopologyNode[]>();
-  for (const node of nodes) {
-    const c = col.get(node.name) ?? 0;
-    columns.set(c, [...(columns.get(c) ?? []), node]);
-  }
-
-  // Adjacency for the ordering pass (same filtering rules as assignColumns).
-  const names = new Set(nodes.map((n) => n.name));
-  const valid = edges.filter(
-    (e) => names.has(e.source) && names.has(e.target) && e.source !== e.target,
-  );
-  const sources = new Map<string, string[]>();
-  const outgoing = new Map<string, string[]>();
-  for (const e of valid) {
-    sources.set(e.target, [...(sources.get(e.target) ?? []), e.source]);
-    outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e.target]);
-  }
-  orderColumns(columns, sources, outgoing);
-
-  const sortedCols = [...columns.keys()].sort((a, b) => a - b);
-  const colHeights = sortedCols.map((c) => {
-    const n = columns.get(c)!.length;
-    return n * NODE_H + (n - 1) * GAP_Y;
-  });
-  const maxColH = colHeights.length ? Math.max(...colHeights) : 0;
-  const result: Positioned[] = [];
-  for (const c of sortedCols) {
-    const colNodes = columns.get(c)!;
-    const colH = colNodes.length * NODE_H + (colNodes.length - 1) * GAP_Y;
-    const top = PAD + (maxColH - colH) / 2;
-    colNodes.forEach((node, j) => {
-      result.push({ node, x: PAD + c * (NODE_W + GAP_X), y: top + j * (NODE_H + GAP_Y), col: c });
-    });
-  }
-  return result;
-}
-
-interface EdgeGeom {
-  key: string;
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-
-/**
- * Where each edge touches its nodes. Outgoing edges spread along the right
- * edge of the source (incoming along the left of the target), each ordered
- * by the OTHER node's vertical position — so a fan-out leaves as a clean
- * fan, one attachment per edge, instead of a bundle at a single point, and
- * the curves that must cross (the graph forces some) meet mid-gap at a
- * clean angle rather than piling up on the node border.
- */
-function computeEdges(positioned: Positioned[], edges: TopologyEdge[]): EdgeGeom[] {
-  const byName = new Map(positioned.map((p) => [p.node.name, p] as const));
-  const valid = edges.filter((e) => byName.has(e.source) && byName.has(e.target));
-
-  // attachment point: spread slots across the middle 64% of the card height
-  const slot = (p: Positioned, side: "out" | "in", i: number, n: number) => {
-    const t = (i + 1) / (n + 1);
-    return {
-      x: side === "out" ? p.x + NODE_W : p.x,
-      y: p.y + NODE_H * (0.18 + 0.64 * t),
-    };
-  };
-
-  const key = (e: TopologyEdge) => `${e.source}|${e.target}`;
-  const src = new Map<string, { x: number; y: number }>();
-  const dst = new Map<string, { x: number; y: number }>();
-
-  for (const name of new Set(valid.map((e) => e.source))) {
-    const p = byName.get(name)!;
-    const list = valid
-      .filter((e) => e.source === name)
-      .sort((a, b) => byName.get(a.target)!.y - byName.get(b.target)!.y);
-    list.forEach((e, i) => src.set(key(e), slot(p, "out", i, list.length)));
-  }
-  for (const name of new Set(valid.map((e) => e.target))) {
-    const p = byName.get(name)!;
-    const list = valid
-      .filter((e) => e.target === name)
-      .sort((a, b) => byName.get(a.source)!.y - byName.get(b.source)!.y);
-    list.forEach((e, i) => dst.set(key(e), slot(p, "in", i, list.length)));
-  }
-
-  const out: EdgeGeom[] = [];
-  for (const e of valid) {
-    const s = src.get(key(e));
-    const d = dst.get(key(e));
-    if (s && d) out.push({ key: key(e), x1: s.x, y1: s.y, x2: d.x, y2: d.y });
-  }
-  return out;
 }
 
 interface Props {
@@ -317,6 +116,10 @@ interface Props {
  * utilization bar) — every signal lives INSIDE the card, nothing floats
  * underneath. Incident targets get an animated dashed accent ring: accent
  * means "the incident will hit this", severity colors mean "health".
+ *
+ * The card is focusable (`tabIndex=0` on an SVG `<g>` with a role), so
+ * the connection-tracing focus state is reachable by keyboard and not
+ * hover-only.
  */
 function NodeView({
   p,
@@ -324,25 +127,22 @@ function NodeView({
   isTarget,
   inPath,
   dimmed,
-  isHovered,
-  onHover,
-  pal,
+  isActive,
+  onActivate,
 }: {
   p: Positioned;
   info: ComponentSizing | undefined;
   isTarget: boolean;
   /** Whole-path incident: soft halo on every node in the blast radius. */
   inPath: boolean;
-  /** Hover focus active and this node is NOT part of the focused subgraph. */
+  /** Focus is active elsewhere and this node is NOT in the focused subgraph. */
   dimmed: boolean;
-  /** This is the node the pointer is on (accent stroke emphasis). */
-  isHovered: boolean;
-  onHover: (name: string | null) => void;
-  pal: Palette;
+  /** This is the pointed-at / focused node (accent stroke emphasis). */
+  isActive: boolean;
+  onActivate: (name: string | null) => void;
 }) {
   const { node, x, y } = p;
   const severity = info ? sizingSeverity(info.status) : null;
-  const sev = severity ? pal.sev[severity] : null;
   const util = info?.mean_utilization ?? 0;
   const trackW = NODE_W - 18;
   const roleLabel = node.role.replace(/_/g, " ");
@@ -360,52 +160,51 @@ function NodeView({
     .filter(Boolean)
     .join(" · ");
 
+  const halo = {
+    x: x - 5,
+    y: y - 5,
+    width: NODE_W + 10,
+    height: NODE_H + 10,
+    rx: 14,
+    fill: "none",
+  };
+
   return (
     <g
+      role="group"
+      tabIndex={0}
+      aria-label={tooltip}
       opacity={dimmed ? 0.22 : 1}
       style={{ transition: "opacity 160ms ease" }}
-      onMouseEnter={() => onHover(p.node.name)}
-      onMouseLeave={() => onHover(null)}
+      className="outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      onMouseEnter={() => onActivate(node.name)}
+      onMouseLeave={() => onActivate(null)}
+      onFocus={() => onActivate(node.name)}
+      onBlur={() => onActivate(null)}
     >
       <title>{tooltip}</title>
       {isTarget ? (
         <>
           {/* soft halo */}
           <rect
-            x={x - 5}
-            y={y - 5}
-            width={NODE_W + 10}
-            height={NODE_H + 10}
-            rx={14}
-            fill="none"
-            stroke={pal.accent}
+            {...halo}
+            className={SURFACE.accentStroke}
             strokeOpacity={0.16}
             strokeWidth={4}
           />
           {/* rotating dashed ring: the incident is "locked on" this node */}
           <rect
-            x={x - 5}
-            y={y - 5}
-            width={NODE_W + 10}
-            height={NODE_H + 10}
-            rx={14}
-            fill="none"
-            stroke={pal.accent}
+            {...halo}
+            className={`${SURFACE.accentStroke} eleven-target-ring`}
             strokeWidth={1.4}
             strokeDasharray="5 7"
-            className="eleven-target-ring"
           />
         </>
       ) : inPath ? (
         // blast radius, not the victim: halo only, no ring
         <rect
-          x={x - 5}
-          y={y - 5}
-          width={NODE_W + 10}
-          height={NODE_H + 10}
-          rx={14}
-          fill="none"
-          stroke={pal.accent}
+          {...halo}
+          className={SURFACE.accentStroke}
           strokeOpacity={0.1}
           strokeWidth={3}
         />
@@ -417,10 +216,15 @@ function NodeView({
         width={NODE_W}
         height={NODE_H}
         rx={10}
-        fill={sev ? sev.soft : pal.nodeBase}
-        stroke={isHovered ? pal.accent : sev ? sev.color : pal.nodeStroke}
-        strokeOpacity={isHovered ? 1 : sev ? 0.4 : 1}
-        strokeWidth={isHovered ? 1.6 : 1}
+        className={`${severity ? SEVERITY_FILL_SOFT[severity] : SURFACE.card} ${
+          isActive
+            ? SURFACE.accentStroke
+            : severity
+              ? SEVERITY_STROKE[severity]
+              : SURFACE.cardStroke
+        }`}
+        strokeOpacity={isActive ? 1 : severity ? 0.4 : 1}
+        strokeWidth={isActive ? 1.6 : 1}
       />
       <rect
         x={x + 9}
@@ -428,30 +232,34 @@ function NodeView({
         width={28}
         height={28}
         rx={8}
-        fill={pal.chipBg}
-        stroke={pal.chipStroke}
+        className={`${SURFACE.chip} ${SURFACE.chipStroke}`}
         strokeWidth={1}
       />
-      <RoleGlyph role={node.role} x={x + 15} y={y + 15} color={sev ? sev.color : pal.dimInk} />
+      <RoleGlyph
+        role={node.role}
+        x={x + 15}
+        y={y + 15}
+        strokeClass={severity ? SEVERITY_STROKE[severity] : SURFACE.dimStroke}
+      />
 
       <text
         x={x + 46}
         y={y + 22}
-        fill={pal.nameInk}
+        className={SURFACE.name}
         fontSize={12}
-        fontFamily="IBM Plex Mono, ui-monospace, monospace"
+        fontFamily={MONO}
         fontWeight={600}
         letterSpacing="0.01em"
       >
         {truncate(node.name, 13)}
       </text>
 
-      {sev && info ? (
+      {severity && info ? (
         <>
           <text
             x={x + 46}
             y={y + 37}
-            fill={sev.color}
+            className={SEVERITY_FILL[severity]}
             fontSize={8}
             fontWeight={600}
             letterSpacing="0.14em"
@@ -463,9 +271,9 @@ function NodeView({
             x={x + NODE_W - 9}
             y={y + 37}
             textAnchor="end"
-            fill={pal.dimInk}
+            className={SURFACE.dim}
             fontSize={10}
-            fontFamily="IBM Plex Mono, ui-monospace, monospace"
+            fontFamily={MONO}
           >
             {fmtPct(info.mean_utilization, 0)}
           </text>
@@ -475,8 +283,8 @@ function NodeView({
             width={trackW}
             height={4}
             rx={2}
-            fill={pal.track.color}
-            fillOpacity={pal.track.opacity}
+            className={SURFACE.track}
+            fillOpacity={0.7}
           />
           {util > 0 ? (
             <rect
@@ -485,7 +293,7 @@ function NodeView({
               width={Math.max(4, trackW * Math.min(1, util))}
               height={4}
               rx={2}
-              fill={sev.color}
+              className={SEVERITY_FILL[severity]}
             />
           ) : null}
         </>
@@ -500,37 +308,35 @@ function NodeView({
  * and whose verdict word carries the sizing call, edges show request flow
  * (animated dashes, restrained lens), and the selected incident's targets
  * wear a dashed accent ring.
+ *
+ * The SVG never scales below its natural size — it scrolls horizontally
+ * instead. A `viewBox` alone made a wide graph on a phone shrink 12px
+ * labels to roughly 4px, i.e. a picture of a diagram rather than a
+ * diagram.
  */
 export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }: Props) {
-  const { theme } = useTheme();
-  const [hovered, setHovered] = useState<string | null>(null);
-  const pal = PALETTES[theme];
+  const [active, setActive] = useState<string | null>(null);
   const positioned = layout(nodes, edges);
   if (positioned.length === 0) return null;
 
-  const colCounts = new Map<number, number>();
-  for (const p of positioned) colCounts.set(p.col, (colCounts.get(p.col) ?? 0) + 1);
-  const maxCol = Math.max(...colCounts.keys());
-  const maxColNodes = Math.max(...colCounts.values());
-  const width = PAD * 2 + (maxCol + 1) * NODE_W + maxCol * GAP_X;
-  const height = PAD * 2 + maxColNodes * NODE_H + Math.max(0, maxColNodes - 1) * GAP_Y;
+  const { width, height } = canvasSize(positioned);
 
   const flagged = new Set(targetNames);
   const edgeGeoms = computeEdges(positioned, edges);
 
-  const edgeKey = (e: TopologyEdge) => `${e.source}|${e.target}`;
   const metaOf = new Map(edges.map((e) => [edgeKey(e), e] as const));
   const colOf = new Map(positioned.map((p) => [p.node.name, p.col] as const));
 
-  // Hover focus: hovering a node keeps it, its direct neighbors, and the
-  // edges between them at full strength and fades everything else — the
-  // direct answer to "what is connected to what" in a dense graph.
+  // Focus tracing: pointing at (or tabbing to) a node keeps it, its direct
+  // neighbors, and the edges between them at full strength and fades
+  // everything else — the direct answer to "what is connected to what" in
+  // a dense graph.
   const focusEdges = new Set<string>();
   const focusNodes = new Set<string>();
-  if (hovered) {
-    focusNodes.add(hovered);
+  if (active) {
+    focusNodes.add(active);
     for (const e of edges) {
-      if (e.source === hovered || e.target === hovered) {
+      if (e.source === active || e.target === active) {
         focusEdges.add(edgeKey(e));
         focusNodes.add(e.source);
         focusNodes.add(e.target);
@@ -540,80 +346,84 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
 
   return (
     <div>
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        className="h-auto w-full"
-        role="img"
-        aria-label={`Topology: ${nodes.map((n) => n.name).join(", ")}; incident targets: ${
-          wholePath ? "whole path" : targetNames.join(", ") || "none"
-        }`}
-      >
-        {/* edges first, so nodes sit on top of the lines: a quiet base line
-            plus a slow accent dash drifting source → target (the request
-            flow) — motion that means "traffic is moving" */}
-        {edgeGeoms.map((g) => {
-          const meta = metaOf.get(g.key);
-          const long = meta
-            ? Math.abs((colOf.get(meta.target) ?? 0) - (colOf.get(meta.source) ?? 0)) > 1
-            : false;
-          const active = !hovered || focusEdges.has(g.key);
-          const emphasized = hovered !== null && focusEdges.has(g.key);
-          const dx = Math.max(24, Math.abs(g.x2 - g.x1) * 0.5);
-          const d = `M ${g.x1} ${g.y1} C ${g.x1 + dx} ${g.y1}, ${g.x2 - dx} ${g.y2}, ${g.x2} ${g.y2}`;
-          return (
-            <g
-              key={g.key}
-              opacity={active ? (long ? 0.55 : 1) : 0.08}
-              style={{ transition: "opacity 160ms ease" }}
-            >
-              <title>
-                {meta ? `${meta.source} → ${meta.target} · p=${meta.probability}` : g.key}
-              </title>
-              <path
-                d={d}
-                fill="none"
-                stroke={emphasized ? pal.accent : pal.edge}
-                strokeOpacity={emphasized ? 0.9 : 1}
-                strokeWidth={emphasized ? 2 : long ? 1.1 : 1.5}
-              />
-              <path
-                d={d}
-                fill="none"
-                stroke={pal.accent}
-                strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeDasharray="4 10"
-                className="eleven-edge-flow"
-              />
-            </g>
-          );
-        })}
+      <div className="-mx-1 overflow-x-auto px-1 pb-1">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          width={width}
+          height={height}
+          style={{ minWidth: width, maxWidth: "100%" }}
+          className="h-auto w-full"
+          role="img"
+          aria-label={`Topology: ${nodes.map((n) => n.name).join(", ")}; incident targets: ${
+            wholePath ? "whole path" : targetNames.join(", ") || "none"
+          }`}
+        >
+          {/* edges first, so nodes sit on top of the lines: a quiet base line
+              plus a slow accent dash drifting source → target (the request
+              flow) — motion that means "traffic is moving" */}
+          {edgeGeoms.map((g) => {
+            const meta = metaOf.get(g.key);
+            const long = meta
+              ? Math.abs((colOf.get(meta.target) ?? 0) - (colOf.get(meta.source) ?? 0)) > 1
+              : false;
+            const lit = !active || focusEdges.has(g.key);
+            const emphasized = active !== null && focusEdges.has(g.key);
+            const d = edgePath(g);
+            return (
+              <g
+                key={g.key}
+                opacity={lit ? (long ? 0.55 : 1) : 0.08}
+                style={{ transition: "opacity 160ms ease" }}
+              >
+                <title>
+                  {meta ? `${meta.source} → ${meta.target} · p=${meta.probability}` : g.key}
+                </title>
+                <path
+                  d={d}
+                  fill="none"
+                  className={emphasized ? SURFACE.accentStroke : SURFACE.edge}
+                  strokeOpacity={emphasized ? 0.9 : 1}
+                  strokeWidth={emphasized ? 2 : long ? 1.1 : 1.5}
+                />
+                <path
+                  d={d}
+                  fill="none"
+                  className={`${SURFACE.accentStroke} eleven-edge-flow`}
+                  strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeDasharray="4 10"
+                />
+              </g>
+            );
+          })}
 
-        {positioned.map((p) => {
-          const name = p.node.name;
-          return (
-            <NodeView
-              key={name}
-              p={p}
-              info={sizing[name]}
-              isTarget={flagged.has(name)}
-              inPath={wholePath}
-              dimmed={hovered !== null && !focusNodes.has(name)}
-              isHovered={hovered === name}
-              onHover={setHovered}
-              pal={pal}
-            />
-          );
-        })}
-      </svg>
+          {positioned.map((p) => {
+            const name = p.node.name;
+            return (
+              <NodeView
+                key={name}
+                p={p}
+                info={sizing[name]}
+                isTarget={flagged.has(name)}
+                inPath={wholePath}
+                dimmed={active !== null && !focusNodes.has(name)}
+                isActive={active === name}
+                onActivate={setActive}
+              />
+            );
+          })}
+        </svg>
+      </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-ink-dim">
         {(["right_sized", "oversized", "undersized"] as const).map((status) => {
           const sev = sizingSeverity(status);
           return (
             <span key={status} className="flex items-center gap-1.5">
-              <span className={`inline-block h-2.5 w-2.5 rounded-[4px] border ${SEVERITY_BORDER[sev]} ${SEVERITY_BG[sev]}`} />
+              <span
+                className={`inline-block h-2.5 w-2.5 rounded-[4px] border ${SEVERITY_BORDER[sev]} ${SEVERITY_BG[sev]}`}
+              />
               {status.replace("_", "-")}
             </span>
           );
@@ -623,7 +433,7 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
           incident target
         </span>
         <span className="ml-auto hidden font-mono text-[10px] sm:inline">
-          bar = mean utilization · hover a node to trace its connections
+          bar = mean utilization · hover or tab to a node to trace its connections
         </span>
       </div>
     </div>

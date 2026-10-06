@@ -209,7 +209,7 @@ function EngineStatus({ collapsed }: { collapsed: boolean }) {
           {up ? "engine ok" : "engine offline"}
         </span>
       </div>
-      <span className={`font-mono text-[10.5px] text-ink-dim/70 ${collapsed ? "md:hidden" : ""}`}>
+      <span className={`font-mono text-[10.5px] text-ink-dim ${collapsed ? "md:hidden" : ""}`}>
         {api.base}
       </span>
     </div>
@@ -236,7 +236,7 @@ function NavLinks({ vertical, collapsed }: { vertical: boolean; collapsed: boole
       >
         <NavGlyph
           icon={item.icon}
-          className={`h-5 w-5 shrink-0 ${active ? "text-accent" : "text-ink-dim/80"}`}
+          className={`h-5 w-5 shrink-0 ${active ? "text-accent" : "text-ink-dim"}`}
         />
         <span
           className={`whitespace-nowrap transition-[max-width,opacity] duration-200 ease-out ${
@@ -317,7 +317,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <div className="border-t border-line pt-4">
               <EngineStatus collapsed={collapsed} />
             </div>
-            <p className={`text-[11px] leading-4 text-ink-dim/80 ${collapsed ? "md:hidden" : ""}`}>
+            <p className={`text-[11px] leading-4 text-ink-dim ${collapsed ? "md:hidden" : ""}`}>
               Pre-deployment digital-twin simulator. Stress-test an
               architecture before it is real infrastructure.
             </p>

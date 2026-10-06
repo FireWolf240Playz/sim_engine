@@ -34,7 +34,10 @@ function EmptyState() {
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div className="rounded-xl border border-sev-crit/40 bg-sev-crit-soft px-5 py-4">
+    <div
+      role="alert"
+      className="rounded-xl border border-sev-crit/40 bg-sev-crit-soft px-5 py-4"
+    >
       <p className="text-sm leading-6 text-sev-crit">{message}</p>
       <p className="mt-2 text-xs text-ink-dim">
         start the engine from the repo root: uvicorn api.main:app --port 8000
@@ -88,7 +91,7 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={resetArchitecture}
-                className="text-[11.5px] text-ink-dim outline-none transition-colors hover:text-ink"
+                className="rounded-sm text-[11.5px] text-ink-dim outline-none transition-colors hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
               >
                 reset
               </button>
@@ -110,7 +113,7 @@ export default function HomePage() {
                 onClick={() => setRunMode(mode)}
                 disabled={isPending}
                 aria-pressed={runMode === mode}
-                className={`h- rounded-md px-3 text-[13px] font-medium outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`h-6 rounded-md px-3 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60 ${
                   runMode === mode
                     ? "bg-accent text-white shadow-card"
                     : "text-ink-dim hover:text-ink"
