@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from sim_core.findings import build_findings
 from sim_core.score import (
     cost_extrapolation,
     cost_grade,
@@ -274,6 +275,10 @@ class MetricsCollector:
         result["cost_per_completed_request"] = cost_per_completed_request(result)
         result["resilience_score"] = resilience_score(result)
         result["cost_grade"] = cost_grade(result)
+        # Roadmap 1.2: the plain-English "why this score" verdict. Pure
+        # function of the dict above (see :mod:`sim_core.findings`), so it
+        # is deterministic and rides along into CLI, API, and profile runs.
+        result["findings"] = build_findings(result)
 
         # Cost split: provisioned base (traffic-independent) vs metered
         # (in_use + queue, load/chaos-driven). The two always sum to total.

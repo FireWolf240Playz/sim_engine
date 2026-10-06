@@ -162,7 +162,23 @@ def _format_summary(summary: Dict[str, Any]) -> str:
                 f"(avg {info['mean_utilization'] * 100:.0f}% util, "
                 f"size-to {info['recommended_capacity']})"
             )
+    lines += _format_findings(summary.get("findings"))
     return "\n".join(lines)
+
+
+def _format_findings(findings: Any) -> list[str]:
+    """Render the "Verdict" block (roadmap 1.2): severity-tagged plain-English
+    lines explaining the score. Empty list when the summary has no findings
+    (e.g. pre-1.2 JSON or a zero-request run), so older reports print unchanged."""
+    if not isinstance(findings, list) or not findings:
+        return []
+    lines = ["", "Verdict (deterministic — same input, same words)", "-" * 52]
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        tag = str(finding.get("severity", "info")).upper()
+        lines.append(f"  [{tag:<4}] {finding.get('text', '')}")
+    return lines
 
 
 def apply_playbook(config: SimulationConfig, name: str) -> SimulationConfig:
@@ -297,6 +313,11 @@ def run_multi_seed(
     print(_format_profile(profile))
 
     typical = typical_index(summaries)
+    verdict = _format_findings(summaries[typical].get("findings"))
+    if verdict:
+        verdict.append(f"  (typical run, seed {seeds[typical]})")
+        print("\n".join(verdict))
+
     png = render_report(simulators[typical].collector, output_path=report_path)
     print(f"\nReport (typical run, seed {runs[typical]['seed']}) written to: {png}")
 

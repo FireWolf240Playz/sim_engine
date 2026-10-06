@@ -6,6 +6,7 @@ import { IncidentPicker } from "@/components/IncidentPicker";
 import { ConfidencePanel } from "@/core/components/ConfidencePanel";
 import { SizingTable } from "@/core/components/SizingTable";
 import { StatCards } from "@/core/components/StatCards";
+import { VerdictPanel } from "@/core/components/VerdictPanel";
 import { TimelineChart } from "@/core/components/TimelineChart";
 import { TopologyDiagram } from "@/core/components/TopologyDiagram";
 import { api } from "@/core/api/client";
@@ -100,7 +101,7 @@ export default function HomePage() {
           <div
             role="group"
             aria-label="Run mode"
-            className="flex items-center rounded-lg border border-line bg-surface-1 p-0.5"
+            className="flex h-7 items-center rounded-lg border border-line bg-surface-1 p-0.5"
           >
             {RUN_MODES.map(({ mode, label }) => (
               <button
@@ -109,7 +110,7 @@ export default function HomePage() {
                 onClick={() => setRunMode(mode)}
                 disabled={isPending}
                 aria-pressed={runMode === mode}
-                className={`h-8 rounded-md px-3 text-[13px] font-medium outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`h- rounded-md px-3 text-[13px] font-medium outline-none transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                   runMode === mode
                     ? "bg-accent text-white shadow-card"
                     : "text-ink-dim hover:text-ink"
@@ -123,7 +124,7 @@ export default function HomePage() {
             type="button"
             onClick={() => requestRun()}
             disabled={isPending}
-            className="h-10 rounded-lg bg-accent px-6 text-sm font-semibold text-white shadow-card transition-colors outline-none hover:bg-accent-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 disabled:cursor-not-allowed disabled:opacity-60"
+            className="h-8 rounded-lg bg-accent px-6 text-sm font-semibold text-white shadow-card transition-colors outline-none hover:bg-accent-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isPending ? "Running…" : "Run"}
           </button>
@@ -142,6 +143,8 @@ export default function HomePage() {
       {error ? <ErrorState message={error} /> : null}
 
       <StatCards summary={result?.summary ?? null} context={context} />
+
+      <VerdictPanel findings={result?.summary.findings ?? null} context={context} />
 
       {result?.profile ? (
         <Panel

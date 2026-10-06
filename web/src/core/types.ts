@@ -69,6 +69,21 @@ export interface ChaosWindow {
   intensity: number;
 }
 
+/** Finding severity tokens — the BE strings from `sim_core/findings.py`. */
+export type FindingSeverity = "info" | "warn" | "crit";
+
+/**
+ * One plain-English verdict line (roadmap 1.2, `sim_core/findings.py`).
+ * `id` is a stable slug; `node` names the component for per-node findings
+ * (rendered as a link to the node inspector once step 1.4 lands).
+ */
+export interface Finding {
+  id: string;
+  severity: FindingSeverity;
+  text: string;
+  node?: string | null;
+}
+
 export type SizingStatus = "right_sized" | "oversized" | "undersized";
 
 export interface ComponentSizing {
@@ -104,6 +119,11 @@ export interface Summary {
   cost_per_completed_request: number | null;
   resilience_score: number | null;
   cost_grade: string | null;
+  /**
+   * Deterministic "why this score" verdict (roadmap 1.2) — 3–5
+   * severity-ordered lines, or a single `info` line when all is healthy.
+   */
+  findings: Finding[];
   cost_base: number;
   cost_metered: number;
   cost_extrapolation: CostExtrapolation | null;

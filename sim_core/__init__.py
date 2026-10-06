@@ -72,6 +72,8 @@ from sim_core.config import (
     TrafficPattern,
 )
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
+from sim_core.findings import Finding, build_findings
+from sim_core.findings import Severity as FindingSeverity
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
 from sim_core.playbooks import PLAYBOOKS, Playbook, get_playbook, list_playbooks
 from sim_core.profile import resilience_profile, typical_index
@@ -126,6 +128,10 @@ __all__ = [
     # Multi-seed confidence profile
     "resilience_profile",
     "typical_index",
+    # Deterministic findings — "why this score"
+    "Finding",
+    "FindingSeverity",
+    "build_findings",
     # Topology
     "Component",
     "Topology",
