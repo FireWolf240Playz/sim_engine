@@ -7,7 +7,7 @@ name = "eleven-sim"
 version = "0.1.0"
 description = "Eleven: a pre-deployment digital-twin cloud-resilience simulator (SimPy + Pydantic)."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 authors = [{ name = "Eleven" }]
 keywords = [
   "simulation",
@@ -19,7 +19,7 @@ keywords = [
 ]
 classifiers = [
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Scientific/Engineering :: Simulation",
   "Typing :: Typed",
 ]
@@ -57,13 +57,13 @@ addopts = "-q"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.14"
 strict = true
 disallow_untyped_defs = true
 no_implicit_optional = true

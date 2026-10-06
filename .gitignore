@@ -1,4 +1,4 @@
-# Secrets - NEVER commit
+# Secrets — NEVER commit
 .env
 
 # Python
@@ -13,9 +13,21 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Simulation outputs
-summary.json
-*.png
-*.json
+# Node / Next (web/.gitignore covers the rest)
+node_modules/
+*.tsbuildinfo
 
-docs/
+# Generated simulation output.
+#
+# The leading slash anchors these to the REPO ROOT. Without it, a bare
+# `*.json` matches recursively and silently ignores web/package.json,
+# web/package-lock.json and web/tsconfig.json — which makes a fresh clone
+# unbuildable. Same reason `*.png` is anchored: web/public assets must stay
+# tracked.
+/*.json
+/*.png
+
+# NOTE: docs/ is intentionally TRACKED. It holds docs/AGENTS.md (the repo map
+# every agent reads first), docs/HANDOFF.md, ROADMAP.md, PLAN.md and
+# FOUNDER_GUIDE.md. Ignoring it left them with no history and absent from a
+# clone.
