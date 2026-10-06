@@ -37,6 +37,7 @@ from sim_core import (
     SimulationConfig,
     TrafficPattern,
     build_findings,
+    verdict_headline,
 )
 from sim_core.cli.sim import _format_summary
 
@@ -87,8 +88,38 @@ def _summary(**overrides: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# one rule per test — exact ids, severities, texts, node
+# one rule per test — exact ids, severities, texts, node (locked contract)
+# + the rich verdict fields (title / why / impact / evidence / recommendation)
 # ---------------------------------------------------------------------------
+
+def _rich_shape(
+    finding: dict[str, Any],
+    *,
+    evidence_required: bool = True,
+    impact_required: bool = True,
+) -> None:
+    """Every produced finding carries well-formed rich verdict fields.
+
+    ``impact`` and ``evidence`` are the two fields that may legitimately
+    be absent, so they are checked only when the test says they must be.
+    """
+    assert isinstance(finding["title"], str) and finding["title"]
+    assert isinstance(finding["why"], str) and finding["why"]
+    assert isinstance(finding["recommendation"], str) and finding["recommendation"]
+    if impact_required:
+        assert isinstance(finding["impact"], str) and finding["impact"]
+    if evidence_required:
+        evidence = finding["evidence"]
+        assert isinstance(evidence, list) and evidence
+        for pair in evidence:
+            assert set(pair) == {"label", "value"}
+            assert isinstance(pair["label"], str) and pair["label"]
+            assert isinstance(pair["value"], str) and pair["value"]
+
+
+def _evidence_labels(finding: dict[str, Any]) -> list[str]:
+    return [pair["label"] for pair in finding["evidence"]]  # type: ignore[index]
+
 
 def test_util_weak_link_is_crit_with_node() -> None:
     findings = build_findings(
@@ -104,55 +135,89 @@ def test_util_weak_link_is_crit_with_node() -> None:
             )
         )
     )
-    assert findings == [
-        {
-            "id": "util_weak_link",
-            "severity": "crit",
-            "text": "worker is your weakest link (avg 97% util)",
-            "node": "worker",
-        }
-    ]
+    assert [f["id"] for f in findings] == ["util_weak_link"]
+    finding = findings[0]
+    assert finding["severity"] == "crit"
+    assert finding["text"] == "worker is your weakest link (avg 97% util)"
+    assert finding["node"] == "worker"
+    # Rich verdict pass: the plain-English "why this" behind the line.
+    assert finding["title"] == "Weakest link: worker"
+    _rich_shape(finding)
+    labels = _evidence_labels(finding)
+    assert "avg utilization" in labels
+    assert "p95 utilization" in labels
+    assert "p95 queue" in labels
+    assert "recommended capacity" in labels
+    assert "Size worker up toward 6 slots" in finding["recommendation"]
 
 
 def test_sla_breach_is_crit() -> None:
     findings = build_findings(_summary(sla_compliance=0.912))
-    assert findings == [
-        {
-            "id": "sla_breach",
-            "severity": "crit",
-            "text": "SLA compliance 91.2% is below the 95% floor",
-        }
-    ]
+    assert [f["id"] for f in findings] == ["sla_breach"]
+    finding = findings[0]
+    assert finding["severity"] == "crit"
+    assert finding["text"] == "SLA compliance 91.2% is below the 95% floor"
+    assert "node" not in finding
+    assert finding["title"] == "SLA breach"
+    _rich_shape(finding)
+    labels = _evidence_labels(finding)
+    assert "SLA compliance" in labels
+    assert "floor" in labels
+    assert "p95 latency" in labels
+    assert "SLA target" in labels
+    assert "~9% of 100 requests" in finding["impact"]
 
 
 def test_retry_storm_is_warn() -> None:
     findings = build_findings(_summary(total_retries=3))
-    assert findings == [
-        {
-            "id": "retry_storm",
-            "severity": "warn",
-            "text": "3.0% of requests needed a retry — a retry storm amplifies the load",
-        }
-    ]
+    assert [f["id"] for f in findings] == ["retry_storm"]
+    finding = findings[0]
+    assert finding["severity"] == "warn"
+    assert finding["text"] == (
+        "3.0% of requests needed a retry — a retry storm amplifies the load"
+    )
+    assert finding["title"] == "Retry storm"
+    _rich_shape(finding)
+    assert "1 in 33" in finding["impact"]
+    labels = _evidence_labels(finding)
+    assert labels == ["retries", "requests", "retry rate"]
 
 
 def test_retry_ratio_at_threshold_is_not_a_storm() -> None:
     # Exactly 2% → the rule fires only strictly above the ratio.
     findings = build_findings(_summary(total_retries=2))
-    assert findings == [
-        {"id": "healthy", "severity": "info", "text": "No structural weaknesses found in this run"}
-    ]
+    assert [f["id"] for f in findings] == ["healthy"]
+    finding = findings[0]
+    assert finding["severity"] == "info"
+    assert finding["text"] == "No structural weaknesses found in this run"
 
 
 def test_p95_headroom_is_warn_with_math() -> None:
     findings = build_findings(_summary(p95_latency=4.0, sla_target=2.0))
-    assert findings == [
-        {
-            "id": "p95_headroom",
-            "severity": "warn",
-            "text": "P95 4.00s is 2.0x the 2.00s SLA target — no headroom left",
-        }
-    ]
+    assert [f["id"] for f in findings] == ["p95_headroom"]
+    finding = findings[0]
+    assert finding["severity"] == "warn"
+    assert finding["text"] == (
+        "P95 4.00s is 2.0x the 2.00s SLA target — no headroom left"
+    )
+    assert finding["title"] == "No headroom left"
+    # p99 (1.2s baseline) stays inside the SLA target → no impact key.
+    _rich_shape(finding, impact_required=False)
+    assert "impact" not in finding
+    labels = _evidence_labels(finding)
+    assert "p95 latency" in labels
+    assert "multiple" in labels
+    assert "p99 latency" in labels
+
+
+def test_p95_headroom_with_over_budget_p99_gains_impact() -> None:
+    findings = build_findings(
+        _summary(p95_latency=4.0, sla_target=2.0, p99_latency=6.0)
+    )
+    finding = findings[0]
+    assert finding["id"] == "p95_headroom"
+    assert "p99" in finding["impact"]
+    assert "6.0s" in finding["impact"]
 
 
 def test_p95_at_ratio_is_not_flagged() -> None:
@@ -180,21 +245,65 @@ def test_undersized_node_is_warn_with_node() -> None:
             )
         )
     )
-    assert findings == [
-        {
-            "id": "undersized",
-            "severity": "warn",
-            "text": "db looks undersized (recommend size-to 12)",
-            "node": "db",
-        }
-    ]
+    assert [f["id"] for f in findings] == ["undersized"]
+    finding = findings[0]
+    assert finding["severity"] == "warn"
+    assert finding["text"] == "db looks undersized (recommend size-to 12)"
+    assert finding["node"] == "db"
+    assert finding["title"] == "db is undersized"
+    _rich_shape(finding)
+    assert "6 waiting in db's queue at peak" in finding["impact"]
+    labels = _evidence_labels(finding)
+    assert "mean utilization" in labels
+    assert "p95 queue" in labels
+    assert "recommended capacity" in labels
 
 
 def test_healthy_run_is_single_info_line() -> None:
     findings = build_findings(_summary())
-    assert findings == [
-        {"id": "healthy", "severity": "info", "text": "No structural weaknesses found in this run"}
-    ]
+    assert [f["id"] for f in findings] == ["healthy"]
+    finding = findings[0]
+    assert finding["severity"] == "info"
+    assert finding["text"] == "No structural weaknesses found in this run"
+    assert finding["title"] == "Holding up"
+    _rich_shape(finding)
+    assert "99.0% of requests met the SLA" in finding["impact"]
+    assert "p95 stayed at 1.0s" in finding["impact"]
+
+
+# ---------------------------------------------------------------------------
+# verdict_headline — the one-sentence overall verdict
+# ---------------------------------------------------------------------------
+
+def test_verdict_headline_breaks_when_critical() -> None:
+    summary = _summary(sla_compliance=0.90)
+    findings = build_findings(summary)
+    headline = verdict_headline(summary, findings)
+    assert "breaks under this load" in headline
+    assert "1 critical failure mode" in headline
+    assert "88/100" in headline  # the baseline summary's resilience_score
+
+
+def test_verdict_headline_bends_when_warn_only() -> None:
+    summary = _summary(total_retries=3)
+    findings = build_findings(summary)
+    headline = verdict_headline(summary, findings)
+    assert "bends but survives" in headline
+    assert "1 structural risk" in headline
+
+
+def test_verdict_headline_holds_when_healthy() -> None:
+    summary = _summary()
+    findings = build_findings(summary)
+    headline = verdict_headline(summary, findings)
+    assert "holds" in headline
+    assert "no structural weaknesses" in headline
+    assert "88/100" in headline
+
+
+def test_verdict_headline_with_no_findings_is_honest() -> None:
+    headline = verdict_headline({"requests": 0}, [])
+    assert headline == "The run produced no requests, so there is nothing to score yet."
 
 
 # ---------------------------------------------------------------------------

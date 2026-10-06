@@ -147,7 +147,12 @@ export default function HomePage() {
 
       <StatCards summary={result?.summary ?? null} context={context} />
 
-      <VerdictPanel findings={result?.summary.findings ?? null} context={context} />
+      <VerdictPanel
+        summary={result?.summary ?? null}
+        context={context}
+        architectureLabel={architectureLabel}
+        seeds={result?.seeds ?? null}
+      />
 
       {result?.profile ? (
         <Panel

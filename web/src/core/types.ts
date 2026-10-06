@@ -72,16 +72,51 @@ export interface ChaosWindow {
 /** Finding severity tokens — the BE strings from `sim_core/findings.py`. */
 export type FindingSeverity = "info" | "warn" | "crit";
 
+/** One evidence chip: a label + the run's actual number behind a finding. */
+export interface EvidencePair {
+  label: string;
+  value: string;
+}
+
 /**
  * One plain-English verdict line (roadmap 1.2, `sim_core/findings.py`).
  * `id` is a stable slug; `node` names the component for per-node findings
  * (rendered as a link to the node inspector once step 1.4 lands).
+ *
+ * The rich verdict pass adds optional fields (pre-rework summaries omit
+ * them, so they stay optional): `title` is the bold card heading, `why`
+ * the mechanism, `impact` the quantified consequence, `evidence` the
+ * numbers, `recommendation` the concrete fix.
  */
 export interface Finding {
   id: string;
   severity: FindingSeverity;
   text: string;
   node?: string | null;
+  title?: string | null;
+  why?: string | null;
+  impact?: string | null;
+  evidence?: EvidencePair[] | null;
+  recommendation?: string | null;
+}
+
+/** One term of the score decomposition (`sim_core/score.py`). */
+export interface ScoreTerm {
+  label: string;
+  /** Signed contribution in points: positive = credit, negative = penalty. */
+  points: number;
+  detail: string;
+}
+
+/** "How the score is built" — the point-by-point score decomposition. */
+export interface ScoreExplanation {
+  /** Must equal `Summary.resilience_score` for the same run. */
+  score: number | null;
+  /** True when the raw blend hit the 0..100 rail before rounding. */
+  clamped: boolean;
+  /** Plain-English band word: Resilient / Solid / At risk / Fragile. */
+  band: string;
+  terms: ScoreTerm[];
 }
 
 export type SizingStatus = "right_sized" | "oversized" | "undersized";
@@ -124,6 +159,10 @@ export interface Summary {
    * severity-ordered lines, or a single `info` line when all is healthy.
    */
   findings: Finding[];
+  /** "How the score is built" — mirrors `resilience_score` exactly. */
+  score_explanation: ScoreExplanation | null;
+  /** One-sentence overall verdict (breaks / bends / holds), deterministic. */
+  verdict_headline: string | null;
   cost_base: number;
   cost_metered: number;
   cost_extrapolation: CostExtrapolation | null;

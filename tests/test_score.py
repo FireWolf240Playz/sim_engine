@@ -31,6 +31,8 @@ from sim_core.score import (
     cost_grade,
     cost_per_completed_request,
     resilience_score,
+    score_band,
+    score_explanation,
     score_headline,
 )
 
@@ -131,6 +133,92 @@ def test_resilience_score_no_sla_target_skips_headroom() -> None:
     # base 92 - 1.5 - 0.3 = 90.2 exactly
     assert resilience_score(without) == 90.2
     assert resilience_score(with_target) == 89.2
+
+
+# ---------------------------------------------------------------------------
+# score_band + score_explanation: "how the score is built", point by point
+# ---------------------------------------------------------------------------
+
+def test_score_band_boundaries() -> None:
+    assert score_band(100.0) == "Resilient"
+    assert score_band(80.0) == "Resilient"
+    assert score_band(79.9) == "Solid"
+    assert score_band(65.0) == "Solid"
+    assert score_band(64.9) == "At risk"
+    assert score_band(50.0) == "At risk"
+    assert score_band(49.9) == "Fragile"
+    assert score_band(0.0) == "Fragile"
+
+
+def test_score_explanation_matches_resilience_score() -> None:
+    """The decomposition can never disagree with the score itself."""
+    fixed = _summary()
+    explanation = score_explanation(fixed)
+    assert explanation is not None
+    assert explanation["score"] == resilience_score(fixed) == 89.2
+    assert explanation["band"] == "Resilient"  # 89.2 >= 80
+
+
+def test_score_explanation_term_decomposition_exact() -> None:
+    """The baseline dict, term by term (inputs in the _summary docstring)."""
+    explanation = score_explanation(_summary())
+    assert explanation is not None
+    points = {term["label"]: term["points"] for term in explanation["terms"]}
+    assert points == {
+        "SLA compliance": 54.0,   # 100 * 0.6 * 0.90
+        "Completion": 38.0,       # 100 * 0.4 * 0.95
+        "Failed requests": -1.5,  # -30 * 5/100
+        "Retry pressure": -0.3,   # -10 * 3/100
+        "P95 headroom": -1.0,     # -10 * (22-20)/20
+    }
+    assert explanation["clamped"] is False
+
+
+def test_score_explanation_term_shape_and_detail() -> None:
+    explanation = score_explanation(_summary())
+    assert explanation is not None
+    for term in explanation["terms"]:
+        assert set(term) == {"label", "points", "detail"}
+        assert isinstance(term["label"], str) and term["label"]
+        assert isinstance(term["points"], (int, float))
+        assert isinstance(term["detail"], str) and term["detail"]
+
+
+def test_score_explanation_zero_penalty_terms_read_zero() -> None:
+    clean = _summary(
+        failed_requests=0,
+        total_retries=0,
+        p95_latency=10.0,  # well inside the 20 s target
+    )
+    explanation = score_explanation(clean)
+    assert explanation is not None
+    points = {term["label"]: term["points"] for term in explanation["terms"]}
+    assert points["Failed requests"] == 0.0
+    assert points["Retry pressure"] == 0.0
+    assert points["P95 headroom"] == 0.0
+    assert explanation["clamped"] is False
+    # 100 * (0.6 * 0.90 + 0.4 * 0.95) = 92.0, nothing deducted
+    assert explanation["score"] == resilience_score(clean) == 92.0
+
+
+def test_score_explanation_flags_the_clamp() -> None:
+    broken = _summary(
+        sla_compliance=0.0,
+        completion_rate=0.0,
+        failed_requests=100,
+        total_retries=50,
+        p95_latency=100.0,
+    )
+    explanation = score_explanation(broken)
+    assert explanation is not None
+    assert explanation["score"] == 0.0
+    assert explanation["clamped"] is True
+    assert explanation["band"] == "Fragile"
+
+
+def test_score_explanation_no_requests_is_none() -> None:
+    assert score_explanation({"requests": 0}) is None
+    assert score_explanation({}) is None
 
 
 # ---------------------------------------------------------------------------
@@ -360,3 +448,11 @@ def test_summary_surfaces_scoring_block_end_to_end() -> None:
     again = CloudSimulator(sim.config).run()
     assert again["resilience_score"] == score
     assert again["cost_grade"] == summary["cost_grade"]
+
+    # Rich verdict pass: the explanation and the headline ride along, and
+    # the explanation can never disagree with the score on the same dict.
+    explanation = summary["score_explanation"]
+    assert explanation is not None
+    assert explanation["score"] == score
+    assert isinstance(summary["verdict_headline"], str)
+    assert summary["verdict_headline"]

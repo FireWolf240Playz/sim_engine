@@ -293,3 +293,156 @@ def score_color(score: float) -> str:
     if score >= 50.0:
         return "#b7791f"  # amber
     return "#e53e3e"  # red
+
+
+# ---------------------------------------------------------------------------
+# Score explanation — "how the score is built", point by point
+# ---------------------------------------------------------------------------
+
+#: Plain-English bands over the 0..100 resilience score (lower bound
+#: inclusive). Distinct from the *color* bands in :func:`score_color`:
+#: the color is a 3-way traffic light, the band is a 4-way plain-English
+#: verdict word the frontend renders next to the score.
+SCORE_BANDS: tuple[tuple[float, str], ...] = (
+    (80.0, "Resilient"),
+    (65.0, "Solid"),
+    (50.0, "At risk"),
+)
+DEFAULT_BAND = "Fragile"
+
+
+def score_band(score: float) -> str:
+    """Plain-English band word for a 0..100 resilience score.
+
+    Bands (lower bound inclusive): **Resilient** >= 80, **Solid** >= 65,
+    **At risk** >= 50, else **Fragile**. Pure and deterministic.
+    """
+    for lower_bound, band in SCORE_BANDS:
+        if score >= lower_bound:
+            return band
+    return DEFAULT_BAND
+
+
+def score_explanation(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Point-by-point decomposition of :func:`resilience_score` in plain terms.
+
+    Mirrors the scoring formula exactly — the same inputs, the same math —
+    so for any summary this function can score, ``explanation["score"] ==
+    resilience_score(summary)`` holds. It exists to answer the question the
+    raw score can't: *why this number?*::
+
+        {
+            "score": 89.2,        # == resilience_score(summary), clamped
+            "clamped": False,     # True when the raw blend hit the 0..100 rail
+            "band": "Solid",      # score_band(score) — the plain-English word
+            "terms": [
+                {"label": "SLA compliance", "points": 54.0,
+                 "detail": "90.0% of requests met the SLA × 60 pts"},
+                ...
+            ],
+        }
+
+    ``terms`` is the ordered list of the five formula contributions
+    (SLA + completion − failed − retries − headroom), each with a signed
+    ``points`` value and a one-line ``detail``. Summing the *unrounded*
+    terms reproduces the raw score before the 0..100 clamp; the displayed
+    per-term points are rounded to one decimal (so their printed sum can
+    differ from ``score`` by a rounding fraction at most, and by more
+    only when ``clamped`` is true). Deterministic: same dict, same words.
+
+    Returns ``None`` when the summary has no requests (nothing to score —
+    mirrors :func:`resilience_score`).
+    """
+    n = summary.get("requests") or 0
+    if n <= 0:
+        return None
+
+    sla = summary.get("sla_compliance")
+    if sla is None:
+        sla = 1.0  # no SLA configured ⇒ the engine counts every request as met
+    completion = summary.get("completion_rate")
+    if completion is None:
+        completion = 0.0
+
+    sla_points = 100.0 * SLA_WEIGHT * sla
+    completion_points = 100.0 * COMPLETION_WEIGHT * completion
+
+    failed = summary.get("failed_requests") or 0
+    failed_points = FAILED_PENALTY * min(1.0, failed / n)
+
+    retries = summary.get("total_retries") or 0
+    retry_points = RETRY_PENALTY * min(1.0, retries / n)
+
+    sla_target = summary.get("sla_target")
+    p95 = summary.get("p95_latency")
+    headroom_points = 0.0
+    if sla_target and p95 is not None and p95 > sla_target:
+        headroom_points = HEADROOM_PENALTY * min(1.0, (p95 - sla_target) / sla_target)
+
+    raw = (
+        sla_points
+        + completion_points
+        - failed_points
+        - retry_points
+        - headroom_points
+    )
+    clamped = (min(100.0, max(0.0, raw)) != raw)
+    final = round(min(100.0, max(0.0, raw)), 1)
+
+    terms: List[Dict[str, Any]] = [
+        {
+            "label": "SLA compliance",
+            "points": round(sla_points, 1),
+            "detail": f"{sla * 100:.1f}% of requests met the SLA × 60 pts",
+        },
+        {
+            "label": "Completion",
+            "points": round(completion_points, 1),
+            "detail": f"{completion * 100:.1f}% of requests completed × 40 pts",
+        },
+        {
+            "label": "Failed requests",
+            "points": round(-failed_points, 1),
+            "detail": (
+                f"{failed} of {n} requests never completed — up to −30 pts"
+                if failed
+                else "no request drops"
+            ),
+        },
+        {
+            "label": "Retry pressure",
+            "points": round(-retry_points, 1),
+            "detail": (
+                f"{retries} retries across {n} requests — up to −10 pts"
+                if retries
+                else "no retries"
+            ),
+        },
+    ]
+    if headroom_points:
+        overage = (p95 - sla_target) / sla_target  # both positive here, p95 > target
+        terms.append(
+            {
+                "label": "P95 headroom",
+                "points": round(-headroom_points, 1),
+                "detail": (
+                    f"p95 {p95:.1f}s runs {overage * 100:.0f}% over the "
+                    f"{sla_target:.1f}s SLA budget — up to −10 pts"
+                ),
+            }
+        )
+    else:
+        terms.append(
+            {
+                "label": "P95 headroom",
+                "points": 0.0,
+                "detail": "p95 sits inside the SLA budget — no headroom penalty",
+            }
+        )
+
+    return {
+        "score": final,
+        "clamped": clamped,
+        "band": score_band(final),
+        "terms": terms,
+    }

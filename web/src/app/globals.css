@@ -122,9 +122,57 @@ body {
   animation: eleven-target-ring 1.5s linear infinite;
 }
 
+/*
+  Verdict report motion — restraint lens: exactly two entrances, both
+  meaning-bearing:
+  1. modal backdrop fades in + panel rises (the report *arrives*)
+  2. the score gauge sweeps from empty to its value (the score *builds*)
+  All of it freezes under prefers-reduced-motion.
+*/
+@keyframes eleven-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes eleven-modal-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.eleven-modal-backdrop {
+  animation: eleven-modal-fade 160ms ease-out both;
+}
+
+.eleven-modal-panel {
+  animation: eleven-modal-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* The gauge arc's sweep — driven by the component flipping its dash
+   offset after the empty state has painted. */
+.eleven-gauge-arc {
+  transition: stroke-dashoffset 900ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .eleven-edge-flow,
   .eleven-target-ring {
     animation: none;
+  }
+  .eleven-modal-backdrop,
+  .eleven-modal-panel {
+    animation: none;
+  }
+  .eleven-gauge-arc {
+    transition: none;
   }
 }

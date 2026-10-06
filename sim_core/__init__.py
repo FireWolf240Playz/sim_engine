@@ -72,7 +72,7 @@ from sim_core.config import (
     TrafficPattern,
 )
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
-from sim_core.findings import Finding, build_findings
+from sim_core.findings import Finding, build_findings, verdict_headline
 from sim_core.findings import Severity as FindingSeverity
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
 from sim_core.playbooks import PLAYBOOKS, Playbook, get_playbook, list_playbooks
@@ -82,7 +82,9 @@ from sim_core.score import (
     cost_grade,
     cost_per_completed_request,
     resilience_score,
+    score_band,
     score_color,
+    score_explanation,
     score_headline,
 )
 from sim_core.topology import Component, Topology
@@ -125,6 +127,8 @@ __all__ = [
     "cost_per_completed_request",
     "score_headline",
     "score_color",
+    "score_band",
+    "score_explanation",
     # Multi-seed confidence profile
     "resilience_profile",
     "typical_index",
@@ -132,6 +136,7 @@ __all__ = [
     "Finding",
     "FindingSeverity",
     "build_findings",
+    "verdict_headline",
     # Topology
     "Component",
     "Topology",

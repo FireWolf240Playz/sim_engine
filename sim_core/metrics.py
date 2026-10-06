@@ -12,12 +12,13 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from sim_core.findings import build_findings
+from sim_core.findings import build_findings, verdict_headline
 from sim_core.score import (
     cost_extrapolation,
     cost_grade,
     cost_per_completed_request,
     resilience_score,
+    score_explanation,
 )
 from sim_core.topology import Topology
 
@@ -279,6 +280,12 @@ class MetricsCollector:
         # function of the dict above (see :mod:`sim_core.findings`), so it
         # is deterministic and rides along into CLI, API, and profile runs.
         result["findings"] = build_findings(result)
+        # The score's own arithmetic in plain terms (same dict, same words) —
+        # powers the "how the score is built" strip and the full report.
+        result["score_explanation"] = score_explanation(result)
+        # One-sentence overall verdict (breaks / bends / holds), derived
+        # from the findings above, so it can never disagree with them.
+        result["verdict_headline"] = verdict_headline(result, result["findings"])
 
         # Cost split: provisioned base (traffic-independent) vs metered
         # (in_use + queue, load/chaos-driven). The two always sum to total.

@@ -25,6 +25,7 @@ from sim_core import (
     GraphTopologyConfig,
     SimulationConfig,
     TrafficPattern,
+    resilience_score,
 )
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -115,6 +116,44 @@ def test_simulate_returns_full_summary(client: TestClient) -> None:
     assert summary["cost_grade"] in {"A", "B", "C", "D", "F"}
     assert "p95_latency" in summary
     assert response.json()["report_png_b64"] is None
+
+
+# Roadmap 1.2 rich verdict: these keys must survive the API boundary —
+# they are pure functions of the summary dict (score.py / findings.py),
+# so the response is the only thing that could drop them (a stale server
+# process did exactly that once; this test pins the contract).
+_VERDICT_FIELDS = ("findings", "score_explanation", "verdict_headline")
+
+
+def test_simulate_summary_carries_rich_verdict_fields(client: TestClient) -> None:
+    summary = client.post("/simulate", json=_body()).json()["summary"]
+    for key in _VERDICT_FIELDS:
+        assert key in summary, f"summary is missing {key!r}"
+    assert isinstance(summary["findings"], list)
+    assert isinstance(summary["verdict_headline"], str)
+    explanation = summary["score_explanation"]
+    # Same dict, same math: the explanation's score is the score itself.
+    assert explanation["score"] == resilience_score(summary)
+    assert isinstance(explanation["band"], str) and explanation["band"]
+    assert {term["label"] for term in explanation["terms"]} >= {
+        "SLA compliance",
+        "Completion",
+        "Failed requests",
+        "Retry pressure",
+        "P95 headroom",
+    }
+
+
+def test_simulate_multi_seed_carries_rich_verdict_fields_in_every_run(
+    client: TestClient,
+) -> None:
+    payload = client.post("/simulate", json=_body(n_seeds=3)).json()
+    assert payload["seeds"] is not None and len(payload["runs"]) == 3
+    for run in payload["runs"]:
+        for key in _VERDICT_FIELDS:
+            assert key in run["summary"], f"run seed={run['seed']} missing {key!r}"
+    for key in _VERDICT_FIELDS:
+        assert key in payload["summary"], f"typical summary missing {key!r}"
 
 
 def test_simulate_rejects_invalid_config(client: TestClient) -> None:

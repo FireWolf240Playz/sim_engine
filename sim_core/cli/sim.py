@@ -179,6 +179,13 @@ def _format_findings(findings: Any) -> list[str]:
             continue
         tag = str(finding.get("severity", "info")).upper()
         lines.append(f"  [{tag:<4}] {finding.get('text', '')}")
+        # Rich verdict pass: the why / impact / fix sub-lines, indented
+        # under the (locked) severity-tagged text line. Older findings
+        # without the fields print exactly as before.
+        for label, key in (("why", "why"), ("impact", "impact"), ("fix", "recommendation")):
+            value = finding.get(key)
+            if isinstance(value, str) and value:
+                lines.append(f"         {label:<7} {value}")
     return lines
 
 
