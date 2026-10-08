@@ -160,7 +160,18 @@ body {
 /* The gauge arc's sweep — driven by the component flipping its dash
    offset after the empty state has painted. */
 .eleven-gauge-arc {
-  transition: stroke-dashoffset 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    stroke-dashoffset 900ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke 400ms ease;
+}
+
+/* A run in flight: the previous results stay put, dimmed, instead of the
+   page blanking and re-flowing. */
+.eleven-results {
+  transition: opacity 200ms ease;
+}
+.eleven-results[aria-busy="true"] {
+  opacity: 0.55;
 }
 
 @media (prefers-reduced-motion: reduce) {

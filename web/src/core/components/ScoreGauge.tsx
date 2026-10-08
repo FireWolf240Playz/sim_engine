@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SEVERITY_STROKE, scoreSeverity } from "../lib/format";
+import { SEVERITY_STROKE, scoreSeverity, type Severity } from "../lib/format";
 import { usePrefersReducedMotion } from "../lib/useReducedMotion";
 
 const R = 52;
@@ -12,13 +12,14 @@ function clamp100(value: number): number {
 }
 
 /**
- * The progress arc. Owns its dash-offset state so the sweep is keyed per
- * score: a new run remounts the arc (empty ring) and sweeps forward to
- * the new value — it never animates *backwards* from the old one.
+ * The progress arc. It mounts once: the first run sweeps it in from an
+ * empty ring, and every later run glides from the previous score to the
+ * new one (the CSS transition on `stroke-dashoffset`), so a re-run moves
+ * the arc instead of emptying and refilling it.
  *
  * The sweep itself is a CSS transition (`.eleven-gauge-arc` in
  * `globals.css`); the double `requestAnimationFrame` just guarantees the
- * empty state has painted before the value changes. Under
+ * empty state has painted before the first value lands. Under
  * `prefers-reduced-motion` the CSS transition is off, so the effect sets
  * the final offset directly.
  */
@@ -61,12 +62,21 @@ function Arc({ score, severityClass }: { score: number; severityClass: string })
 
 /**
  * The resilience score as an animated ring — the visual anchor of the
- * verdict. Colour follows `scoreSeverity` (the same 3-way bands as
- * `StatCards`, so the panel and the card row never disagree); the number
- * is the run's exact `resilience_score`.
+ * verdict. Colour follows `scoreSeverity` unless the caller passes the
+ * verdict's own `severity` (`VerdictPanel` does, so a critical finding
+ * turns the ring red even at a high score); the number is the run's exact
+ * `resilience_score`.
  */
-export function ScoreGauge({ score, size = 132 }: { score: number; size?: number }) {
-  const severityClass = SEVERITY_STROKE[scoreSeverity(clamp100(score))];
+export function ScoreGauge({
+  score,
+  size = 132,
+  severity,
+}: {
+  score: number;
+  size?: number;
+  severity?: Severity;
+}) {
+  const severityClass = SEVERITY_STROKE[severity ?? scoreSeverity(clamp100(score))];
   return (
     <div
       className="relative shrink-0"
@@ -77,7 +87,7 @@ export function ScoreGauge({ score, size = 132 }: { score: number; size?: number
       <svg viewBox="0 0 128 128" className="h-full w-full" aria-hidden="true" focusable="false">
         <circle cx="64" cy="64" r={R} fill="none" strokeWidth="9" className="stroke-surface-2" />
         <g transform="rotate(-90 64 64)">
-          <Arc key={score} score={score} severityClass={severityClass} />
+          <Arc score={score} severityClass={severityClass} />
         </g>
       </svg>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">

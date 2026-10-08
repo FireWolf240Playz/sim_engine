@@ -5,7 +5,7 @@ import type { Finding, Summary } from "../types";
 import {
   SEVERITY_BG,
   SEVERITY_TEXT,
-  scoreSeverity,
+  verdictSeverity,
   type Severity,
 } from "../lib/format";
 import { SeverityIcon } from "./SeverityIcon";
@@ -72,21 +72,21 @@ export function VerdictPanel({
   const [reportOpen, setReportOpen] = useState(false);
 
   const rows = summary?.findings ?? [];
-  const tone: Severity | "neutral" = rows.length ? worstTone(rows) : "neutral";
   const score = summary?.resilience_score ?? null;
   const explanation = summary?.score_explanation ?? null;
   const headline = summary?.verdict_headline ?? null;
+  // One colour for the whole verdict: bar, icon, band word and gauge. A
+  // high score next to a critical finding reads red, never green.
+  const tone: Severity | "neutral" = summary
+    ? verdictSeverity(score, rows.length ? worstTone(rows) : null)
+    : "neutral";
 
   const critCount = rows.filter((row) => row.severity === "crit").length;
   const warnCount = rows.filter((row) => row.severity === "warn").length;
 
   const bandWord = explanation?.band ?? null;
-  const bandClass =
-    score !== null
-      ? SEVERITY_TEXT[scoreSeverity(score)]
-      : tone !== "neutral"
-        ? SEVERITY_TEXT[tone]
-        : "text-ink-dim";
+  const bandClass = tone !== "neutral" ? SEVERITY_TEXT[tone] : "text-ink-dim";
+  const cappedBy = explanation?.band_capped_by ?? null;
 
   return (
     <div className="overflow-hidden rounded-xl border border-line bg-surface-1 shadow-card">
@@ -105,7 +105,14 @@ export function VerdictPanel({
             </span>
             <h2 className="text-[15px] font-semibold text-ink">Verdict</h2>
             {bandWord ? (
-              <span className={`text-[11px] font-semibold tracking-[0.08em] ${bandClass}`}>
+              <span
+                className={`text-[11px] font-semibold tracking-[0.08em] ${bandClass}`}
+                title={
+                  cappedBy
+                    ? `Capped by the ${cappedBy.replace(/_/g, " ")} finding — the score alone would read higher`
+                    : undefined
+                }
+              >
                 {bandWord}
               </span>
             ) : null}
@@ -127,7 +134,9 @@ export function VerdictPanel({
         {summary ? (
           <>
             <div className="mt-5 grid items-center gap-x-8 gap-y-4 md:grid-cols-[auto_1fr]">
-              {score !== null ? <ScoreGauge score={score} /> : null}
+              {score !== null ? (
+                <ScoreGauge score={score} severity={tone === "neutral" ? undefined : tone} />
+              ) : null}
               <div className="min-w-0">
                 {headline ? (
                   <p className="max-w-2xl text-[17px] font-medium leading-7 text-ink">{headline}</p>

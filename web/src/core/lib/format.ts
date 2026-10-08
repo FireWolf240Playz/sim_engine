@@ -13,6 +13,24 @@ export function scoreSeverity(score: number | null): Severity {
   return "crit";
 }
 
+const SEVERITY_RANK: Record<Severity, number> = { crit: 0, warn: 1, ok: 2 };
+
+/** The more severe of two severities. */
+export function worseSeverity(a: Severity, b: Severity): Severity {
+  return SEVERITY_RANK[a] <= SEVERITY_RANK[b] ? a : b;
+}
+
+/**
+ * The verdict's one colour: the worse of the score's band and the worst
+ * finding. The header bar, icon, band word and gauge ring all use it, so a
+ * high score can never sit green next to a critical finding (the engine
+ * caps the band word the same way, `score.py::capped_band`).
+ */
+export function verdictSeverity(score: number | null, worstFinding: Severity | null): Severity {
+  const fromScore = scoreSeverity(score);
+  return worstFinding === null ? fromScore : worseSeverity(fromScore, worstFinding);
+}
+
 export function gradeSeverity(grade: string | null): Severity {
   if (grade === "A" || grade === "B") return "ok";
   if (grade === "C") return "warn";

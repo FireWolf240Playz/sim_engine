@@ -10,8 +10,34 @@ import {
   gradeSeverity,
   scoreSeverity,
   sizingSeverity,
+  verdictSeverity,
+  worseSeverity,
   type Severity,
 } from "@/core/lib/format";
+
+describe("verdictSeverity", () => {
+  it("never shows green next to a critical finding", () => {
+    // The reported bug: 95.4 "Resilient" with a crit sla_breach.
+    expect(verdictSeverity(95.4, "crit")).toBe("crit");
+    expect(verdictSeverity(95.4, "warn")).toBe("warn");
+    expect(verdictSeverity(95.4, "ok")).toBe("ok");
+  });
+
+  it("falls back to the score when there are no findings", () => {
+    expect(verdictSeverity(95.4, null)).toBe("ok");
+    expect(verdictSeverity(60, null)).toBe("warn");
+  });
+
+  it("a healthy finding never lifts a low score", () => {
+    expect(verdictSeverity(40, "ok")).toBe("crit");
+  });
+
+  it("worseSeverity is symmetric", () => {
+    expect(worseSeverity("ok", "crit")).toBe("crit");
+    expect(worseSeverity("crit", "ok")).toBe("crit");
+    expect(worseSeverity("warn", "ok")).toBe("warn");
+  });
+});
 
 const SEVERITIES: Severity[] = ["ok", "warn", "crit"];
 

@@ -148,6 +148,9 @@ export default function HomePage() {
 
       {error ? <ErrorState message={error} /> : null}
 
+      {/* Results stay mounted across runs: React patches only what changed,
+          and a run in flight dims them instead of blanking the page. */}
+      <div className="eleven-results flex flex-col gap-5" aria-busy={isPending}>
       <StatCards summary={result?.summary ?? null} context={context} />
 
       <VerdictPanel
@@ -157,15 +160,22 @@ export default function HomePage() {
         seeds={result?.seeds ?? null}
       />
 
-      {result?.summary.suggestions?.length &&
-      pendingSuggestions(config, result.summary.suggestions).length > 0 ? (
-        <Panel title="Fix it" aside="right-size, then re-run to prove it held">
-          <FixDiffPanel
-            config={config}
-            suggestions={result.summary.suggestions}
-            onApply={applyAndRerun}
-            isPending={isPending}
-          />
+      {result ? (
+        <Panel title="Fix it" aside="sizes verified by simulation on the same seed">
+          {pendingSuggestions(config, result.summary.suggestions ?? []).length ? (
+            <FixDiffPanel
+              config={config}
+              suggestions={result.summary.suggestions ?? []}
+              onApply={applyAndRerun}
+              isPending={isPending}
+            />
+          ) : (
+            // Kept mounted when empty, so applying a fix never makes the
+            // panels below jump up the page.
+            <p className="text-[13px] text-ink-dim">
+              Nothing to change: every node is the right size for this load.
+            </p>
+          )}
         </Panel>
       ) : null}
 
@@ -222,6 +232,7 @@ export default function HomePage() {
       ) : (
         !error && <EmptyState />
       )}
+      </div>
     </div>
   );
 }

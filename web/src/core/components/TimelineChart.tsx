@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -79,7 +80,10 @@ function fmtTooltip(value: unknown): string {
 export function TimelineChart({ ticks, slaTarget, windows, horizon, band, seedCount }: Props) {
   const reducedMotion = usePrefersReducedMotion();
   const tokens = useThemeTokens();
-  const animate = !reducedMotion && ticks.length > 1;
+  // Draw-in only for the data the chart mounted with: a re-run updates the
+  // lines in place instead of erasing and re-sweeping the whole chart.
+  const [firstTicks] = useState(ticks);
+  const animate = !reducedMotion && ticks.length > 1 && ticks === firstTicks;
   const top = yAxisTop(ticks, slaTarget, band);
   const data = withBand(ticks, band);
   const hasBand = data.some((t) => t.p95_band !== null);

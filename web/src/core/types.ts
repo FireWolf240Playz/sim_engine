@@ -116,6 +116,9 @@ export interface ScoreExplanation {
   clamped: boolean;
   /** Plain-English band word: Resilient / Solid / At risk / Fragile. */
   band: string;
+  /** Id of the finding that capped `band` below the score's own band (crit caps
+   * at "At risk", warn at "Solid"), or null when the score set it. */
+  band_capped_by?: string | null;
   terms: ScoreTerm[];
 }
 
