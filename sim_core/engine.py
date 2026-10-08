@@ -219,24 +219,27 @@ class CloudSimulator:
             env.process(chaos_mod.inject(env, self.topology, event, self.rng))
         env.process(self.collect_utilization())
 
-    def run(self) -> Dict[str, Any]:
+    def run(self, *, suggest: bool = True) -> Dict[str, Any]:
         """Run to the configured duration and return the headline summary.
 
         ``env.run(until=...)`` bounds the run: the traffic generator, chaos
         loops, and metric sampler all contain ``while True``/bounded loops that
         are simply suspended once the clock reaches the horizon.
+
+        ``suggest`` (default on) attaches ``summary["suggestions"]``: the
+        simulation-verified right-sizing list (:mod:`sim_core.rightsize`).
+        Riding inside the summary means the CLI, the API and every multi-seed
+        run get it with no API shape change. Verification re-runs the engine
+        with ``suggest=False``, which is also what stops it recursing.
         """
         self._spawn_processes()
         self.env.run(until=self.config.duration)
         self.collector.settle_cost(self.config.duration)
         summary = self.collector.summary()
-        # Roadmap 1.3: ride the deterministic "fix it" list along inside the
-        # summary, so the CLI, the API, and every multi-seed profile run get
-        # it with no API shape change. Pure over (nodes, summary) — no re-run.
-        from sim_core.suggestions import build_suggestions
+        if suggest:
+            from sim_core.rightsize import right_size  # local: rightsize imports this module
 
-        nodes = [node.model_dump(mode="json") for node in self.config.topology.nodes]
-        summary["suggestions"] = build_suggestions(nodes, summary)
+            summary["suggestions"] = right_size(self.config, summary)
         return summary
 
     # -- convenience -------------------------------------------------------

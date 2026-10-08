@@ -25,6 +25,14 @@ Rules pinned here (decided 2026-10-08):
   capacity), ``None`` when the node has no rate.
 - ``summary()["suggestions"]`` carries the list, so the CLI, every API
   run and every multi-seed run get it with no API shape change.
+
+Revised 2026-10-09 (1.3d): the rules above are now the *flagging* formula
+(``build_suggestions``, still pinned below). The sizes the summary carries
+come from ``sim_core.rightsize.right_size``, which proves each one by
+re-simulating on the same seed: a raise is the smallest size that clears
+"undersized"; a cut is the smallest size that adds no crit/warn finding and
+costs at most 0.5 score points in total. One apply lands on the end state.
+The formula's 6 → 4 cut breached the demo's SLA; that is the bug this pins.
 """
 
 from __future__ import annotations
@@ -42,6 +50,8 @@ from sim_core import CloudSimulator, SimulationConfig
 from sim_core.cli import main
 from sim_core.cli.sim import default_config
 from sim_core.compare import set_path
+from sim_core.rightsize import SCORE_TOLERANCE, right_size
+from sim_core.score import capped_band
 from sim_core.suggestions import build_suggestions
 
 SUGGESTION_KEYS = {"node", "param", "current", "proposed", "reason", "est_monthly_delta"}
@@ -216,15 +226,141 @@ def _apply(config: SimulationConfig, suggestions: list[Any], *, raises: bool) ->
     return config
 
 
-def test_summary_carries_suggestions_built_from_the_run_config() -> None:
+def _demo() -> SimulationConfig:
+    """Mirror of ``web/src/core/lib/demo.ts`` (the calibrated clean run)."""
+    nodes = [
+        ("lb", "load_balancer", 10, 0.3, 0.04),
+        ("worker", "worker", 6, 1.0, 0.05),
+        ("cache", "cache", 8, 0.2, 0.03),
+        ("db", "database", 3, 3.0, 0.06),
+        ("pricing_api", "external_api", 4, 1.2, 0.02),
+    ]
+    return SimulationConfig.model_validate(
+        {
+            "seed": 42,
+            "duration": 60,
+            "metrics_interval": 2,
+            "sla_target": 10,
+            "topology": {
+                "nodes": [
+                    {
+                        "name": name,
+                        "role": role,
+                        "max_capacity": cap,
+                        "service_time": st,
+                        "cost_per_hour": rate,
+                        **({"hit_rate": 0.7} if role == "cache" else {}),
+                    }
+                    for name, role, cap, st, rate in nodes
+                ],
+                "edges": [
+                    {"source": "lb", "target": "worker", "probability": 1.0},
+                    {"source": "worker", "target": "cache", "probability": 1.0},
+                    {"source": "worker", "target": "pricing_api", "probability": 1.0},
+                    {"source": "cache", "target": "db", "probability": 1.0},
+                ],
+            },
+            "traffic": {"base_rps": 2.0, "duration": 60},
+            "chaos": [],
+        }
+    )
+
+
+def _serious(summary: dict[str, Any]) -> set[str]:
+    return {
+        f"{f['id']}:{f.get('node') or ''}"
+        for f in summary["findings"]
+        if f["severity"] in ("crit", "warn")
+    }
+
+
+def test_summary_carries_verified_suggestions() -> None:
     config = _squeezed()
     summary = CloudSimulator(config).run()
-    assert "suggestions" in summary
-    assert summary["suggestions"] == build_suggestions(_nodes(config), summary)
-    assert any(
-        s["node"] == "app-worker" and (s["current"], s["proposed"]) == (2, 3)
-        for s in summary["suggestions"]
-    )
+    assert summary["suggestions"] == right_size(config, summary)
+    raise_ = next(s for s in summary["suggestions"] if s["node"] == "app-worker")
+    assert (raise_["current"], raise_["proposed"]) == (2, 4)
+    assert "verified by simulation" in raise_["reason"]
+
+
+def test_candidate_runs_do_not_suggest() -> None:
+    """Verification re-runs the engine; without this flag it would recurse."""
+    assert "suggestions" not in CloudSimulator(_demo()).run(suggest=False)
+
+
+def test_right_size_is_deterministic() -> None:
+    config = _demo()
+    summary = CloudSimulator(config).run(suggest=False)
+    assert right_size(config, summary) == right_size(config, summary)
+
+
+def test_demo_cuts_never_break_the_run() -> None:
+    """The bug: the formula cut the healthy demo's worker 6 → 4 and the
+    re-run breached the SLA. A verified cut adds no crit/warn finding and
+    costs at most SCORE_TOLERANCE points."""
+    config = _demo()
+    before = CloudSimulator(config).run()
+    assert before["suggestions"], "the demo is over-provisioned; expect cuts"
+    applied = _apply(config, before["suggestions"], raises=False)
+    after = CloudSimulator(applied).run()
+    assert _serious(after) <= _serious(before)
+    assert after["resilience_score"] >= before["resilience_score"] - SCORE_TOLERANCE
+
+
+def test_one_apply_reaches_the_end_state() -> None:
+    """No 25% staircase: one apply, and the re-run has nothing left to change."""
+    for config in (_demo(), _squeezed()):
+        first = CloudSimulator(config).run()
+        applied = config
+        for s in first["suggestions"]:
+            applied = set_path(applied, f"{s['node']}.{s['param']}", s["proposed"])
+        assert CloudSimulator(applied).run()["suggestions"] == []
+
+
+def test_raise_that_cannot_help_is_not_suggested() -> None:
+    """A raise is only offered when some size actually clears the node."""
+    calls: list[int] = []
+
+    def never_clears(config: SimulationConfig) -> dict[str, Any]:
+        calls.append(1)
+        cap = next(n.max_capacity for n in config.topology.nodes if n.name == "worker")
+        return {
+            "component_sizing": {"worker": _sizing("undersized", 0.99)},
+            "findings": [],
+            "resilience_score": 50.0,
+            "_cap": cap,
+        }
+
+    config = _demo()
+    summary = {"component_sizing": {"worker": _sizing("undersized", 0.99)}}
+    assert right_size(config, summary, simulate=never_clears) == []
+    assert len(calls) < 10  # bounded search, then give up
+
+
+# ---------------------------------------------------------------------------
+# verdict band: never "Resilient" next to a critical finding
+# ---------------------------------------------------------------------------
+
+def test_band_is_capped_by_the_worst_finding() -> None:
+    crit = [{"id": "sla_breach", "severity": "crit", "text": "x"}]
+    warn = [{"id": "retry_storm", "severity": "warn", "text": "x"}]
+    info = [{"id": "healthy", "severity": "info", "text": "x"}]
+    assert capped_band(95.4, crit) == ("At risk", "sla_breach")
+    assert capped_band(95.4, warn) == ("Solid", "retry_storm")
+    assert capped_band(95.4, info) == ("Resilient", None)
+    assert capped_band(95.4, crit + warn) == ("At risk", "sla_breach")
+    # The cap only ever lowers: a low score keeps its own (worse) band.
+    assert capped_band(40.0, crit) == ("Fragile", None)
+    assert capped_band(70.0, warn) == ("Solid", None)
+
+
+def test_summary_band_agrees_with_findings() -> None:
+    summary = CloudSimulator(default_config()).run(suggest=False)
+    assert any(f["severity"] == "crit" for f in summary["findings"])
+    explanation = summary["score_explanation"]
+    assert explanation["band"] in ("At risk", "Fragile")
+    if explanation["band_capped_by"] is not None:
+        assert explanation["band_capped_by"] in {f["id"] for f in summary["findings"]}
 
 
 def test_applying_raises_clears_every_undersized_node() -> None:

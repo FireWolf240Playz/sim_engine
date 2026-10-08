@@ -323,6 +323,37 @@ def score_band(score: float) -> str:
     return DEFAULT_BAND
 
 
+#: Best band a run may carry while it has a finding of this severity. A
+#: crit finding is a failure the architecture should not allow, so the
+#: verdict word may not call it "Resilient" however high the score is.
+BAND_CAP_BY_SEVERITY: dict[str, str] = {"crit": "At risk", "warn": "Solid"}
+
+#: Best → worst, for comparing two band words.
+_BAND_ORDER: tuple[str, ...] = tuple(band for _, band in SCORE_BANDS) + (DEFAULT_BAND,)
+
+
+def capped_band(score: float, findings: Any) -> tuple[str, Optional[str]]:
+    """``(band, capped_by)``: :func:`score_band` lowered to the cap of the
+    worst finding, so the verdict word never contradicts the findings under
+    it. ``capped_by`` is the id of the finding that lowered it, else ``None``.
+    """
+    band = score_band(score)
+    if not isinstance(findings, list):
+        return band, None
+    for severity in ("crit", "warn"):
+        hit = next(
+            (f for f in findings if isinstance(f, dict) and f.get("severity") == severity),
+            None,
+        )
+        if hit is None:
+            continue
+        cap = BAND_CAP_BY_SEVERITY[severity]
+        if _BAND_ORDER.index(band) < _BAND_ORDER.index(cap):
+            return cap, str(hit.get("id"))
+        return band, None
+    return band, None
+
+
 def score_explanation(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Point-by-point decomposition of :func:`resilience_score` in plain terms.
 
@@ -334,7 +365,8 @@ def score_explanation(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         {
             "score": 89.2,        # == resilience_score(summary), clamped
             "clamped": False,     # True when the raw blend hit the 0..100 rail
-            "band": "Solid",      # score_band(score) — the plain-English word
+            "band": "Solid",      # score_band(score), capped by the worst finding
+            "band_capped_by": None,  # finding id that lowered the band, if any
             "terms": [
                 {"label": "SLA compliance", "points": 54.0,
                  "detail": "90.0% of requests met the SLA × 60 pts"},
@@ -440,9 +472,11 @@ def score_explanation(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
         )
 
+    band, capped_by = capped_band(final, summary.get("findings"))
     return {
         "score": final,
         "clamped": clamped,
-        "band": score_band(final),
+        "band": band,
+        "band_capped_by": capped_by,
         "terms": terms,
     }
