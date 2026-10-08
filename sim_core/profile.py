@@ -170,3 +170,30 @@ def typical_index(summaries: List[Dict[str, Any]]) -> int:
         ),
     )
     return order[len(order) // 2]
+
+
+def timeseries_band(series: Sequence[Sequence[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    """Per-tick P95 latency range across runs: the timeline's confidence band.
+
+    *series* holds one ``timeseries()`` list per run. Ticks are matched by
+    ``time`` (every run of one config samples on the same clock), in the
+    order they first appear. Each entry is ``{time, p95_min, p95_max}``
+    over the runs that completed a request in that tick; both are ``None``
+    when none did, so the chart gaps instead of drawing a fake zero (the
+    same rule as :meth:`MetricsCollector.timeseries`).
+    """
+    by_time: Dict[float, List[float]] = {}
+    for ticks in series:
+        for tick in ticks:
+            values = by_time.setdefault(float(tick["time"]), [])
+            p95 = tick.get("p95_latency")
+            if p95 is not None:
+                values.append(float(p95))
+    return [
+        {
+            "time": time,
+            "p95_min": min(values) if values else None,
+            "p95_max": max(values) if values else None,
+        }
+        for time, values in by_time.items()
+    ]

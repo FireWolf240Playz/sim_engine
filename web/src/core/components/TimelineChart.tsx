@@ -12,7 +12,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { ChaosWindow, TimelineTick } from "../types";
+import type { ChaosWindow, TimelineBandTick, TimelineTick } from "../types";
+import { withBand } from "../lib/timeline";
 import { usePrefersReducedMotion } from "../lib/useReducedMotion";
 import { useThemeTokens } from "../lib/useThemeTokens";
 
@@ -32,12 +33,18 @@ export function niceCeil(value: number): number {
  * The Y domain must always cover the SLA line — auto-scaling to the data
  * alone pushes a 10 s SLA off-screen when latency stays near 8 s.
  */
-export function yAxisTop(ticks: TimelineTick[], slaTarget: number | null | undefined): number {
+export function yAxisTop(
+  ticks: TimelineTick[],
+  slaTarget: number | null | undefined,
+  band?: TimelineBandTick[] | null,
+): number {
   const dataMax = ticks.reduce(
     (max, t) => Math.max(max, t.p50_latency ?? 0, t.p95_latency ?? 0),
     0,
   );
-  return niceCeil(Math.max(slaTarget ?? 0, dataMax, 1) * 1.1);
+  // The band's top edge is data too: a worst seed must not clip off-chart.
+  const bandMax = (band ?? []).reduce((max, b) => Math.max(max, b.p95_max ?? 0), 0);
+  return niceCeil(Math.max(slaTarget ?? 0, dataMax, bandMax, 1) * 1.1);
 }
 
 interface Props {
@@ -45,6 +52,17 @@ interface Props {
   slaTarget: number | null | undefined;
   windows: ChaosWindow[];
   horizon: number;
+  /** Multi-seed runs: P95 range across every seed, drawn behind the line. */
+  band?: TimelineBandTick[] | null;
+  /** How many seeds the band spans (legend text). */
+  seedCount?: number;
+}
+
+function fmtTooltip(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `${Number(value[0]).toFixed(2)}–${Number(value[1]).toFixed(2)}s`;
+  }
+  return `${Number(value).toFixed(2)}s`;
 }
 
 /**
@@ -58,11 +76,24 @@ interface Props {
  * its own; the fixed-height wrapper means the one frame before the
  * tokens resolve costs no layout shift.
  */
-export function TimelineChart({ ticks, slaTarget, windows, horizon }: Props) {
+export function TimelineChart({ ticks, slaTarget, windows, horizon, band, seedCount }: Props) {
   const reducedMotion = usePrefersReducedMotion();
   const tokens = useThemeTokens();
   const animate = !reducedMotion && ticks.length > 1;
-  const top = yAxisTop(ticks, slaTarget);
+  const top = yAxisTop(ticks, slaTarget, band);
+  const data = withBand(ticks, band);
+  const hasBand = data.some((t) => t.p95_band !== null);
+
+  if (ticks.length === 0) {
+    return (
+      <div
+        className="flex items-center justify-center rounded-lg border border-dashed border-line text-[13px] text-ink-dim"
+        style={{ height: CHART_H }}
+      >
+        No timeline data came back for this run.
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -70,6 +101,12 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon }: Props) {
         <span className="flex items-center gap-2">
           <span className="h-0.5 w-5 rounded-full bg-accent" /> P95 latency
         </span>
+        {hasBand ? (
+          <span className="flex items-center gap-2">
+            <span className="h-2.5 w-5 rounded-[3px] bg-accent/20" /> P95 range
+            {seedCount ? ` across ${seedCount} seeds` : ""}
+          </span>
+        ) : null}
         <span className="flex items-center gap-2">
           <span className="h-0.5 w-5 rounded-full bg-ink-dim" /> P50 latency
         </span>
@@ -86,7 +123,7 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon }: Props) {
       <div className="w-full" style={{ height: CHART_H }}>
         {tokens ? (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={ticks} margin={{ top: 16, right: 12, bottom: 0, left: 0 }}>
+            <ComposedChart data={data} margin={{ top: 16, right: 12, bottom: 0, left: 0 }}>
               <CartesianGrid
                 vertical={false}
                 stroke={tokens.color["--color-line"]}
@@ -122,7 +159,7 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon }: Props) {
                 labelStyle={{ color: tokens.color["--color-ink-dim"], fontFamily: MONO }}
                 labelFormatter={(label: unknown) => `t = ${label}s`}
                 formatter={(value: unknown, name: unknown) => [
-                  `${Number(value).toFixed(2)}s`,
+                  fmtTooltip(value),
                   String(name ?? ""),
                 ]}
               />
@@ -156,6 +193,19 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon }: Props) {
                 />
               ) : null}
 
+              {hasBand ? (
+                <Area
+                  type="monotone"
+                  dataKey="p95_band"
+                  name="P95 range"
+                  stroke="none"
+                  fill={tokens.color["--color-accent"]}
+                  fillOpacity={0.14}
+                  connectNulls
+                  isAnimationActive={animate}
+                  animationDuration={900}
+                />
+              ) : null}
               <Area
                 type="monotone"
                 dataKey="p50_latency"

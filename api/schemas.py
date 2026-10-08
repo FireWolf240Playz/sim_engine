@@ -79,6 +79,12 @@ class SimulateResponse(BaseModel):
     seeds: list[int] | None = None
     runs: list[dict[str, Any]] | None = None
     profile: dict[str, Any] | None = None
+    #: Multi-seed only: which seed the headline ``summary`` (and
+    #: ``timeseries``) came from.
+    typical_seed: int | None = None
+    #: Multi-seed + ``include_timeseries`` only: per-tick
+    #: ``{time, p95_min, p95_max}`` across every seed.
+    timeseries_band: list[dict[str, Any]] | None = None
 
 
 class CompareRequest(BaseModel):

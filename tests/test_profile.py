@@ -36,6 +36,7 @@ from sim_core import (
     resilience_profile,
     typical_index,
 )
+from sim_core.profile import timeseries_band
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -278,16 +279,47 @@ def test_api_seeds_list_wins_over_n_seeds(client: TestClient) -> None:
     assert len(multi["runs"]) == 1
 
 
-def test_api_multi_run_omits_png_and_timeseries(client: TestClient) -> None:
-    multi = client.post(
-        "/simulate",
-        json=_body(n_seeds=2, include_report_png=True, include_timeseries=True),
-    ).json()
-    # Multi-mode carries summaries only (kept cheap): the single-run keys
-    # for heavy payloads are not present at all.
-    assert "report_png_b64" not in multi
-    assert "timeseries" not in multi
-    assert set(multi) == {"seeds", "runs", "profile", "chaos", "summary"}
+def test_api_multi_run_omits_png_and_timeline_unless_asked(client: TestClient) -> None:
+    multi = client.post("/simulate", json=_body(n_seeds=2, include_report_png=True)).json()
+    # The PNG stays single-run only; no timeline keys unless requested.
+    assert set(multi) == {"seeds", "runs", "profile", "chaos", "summary", "typical_seed"}
+
+
+def test_api_multi_run_timeline_is_the_typical_runs(client: TestClient) -> None:
+    """The 5-seed run used to render an empty timeline: multi-mode dropped
+    ``include_timeseries`` silently. The timeline follows the headline."""
+    body = _body(seeds=[101, 202, 303], include_timeseries=True)
+    multi = client.post("/simulate", json=body).json()
+    assert multi["typical_seed"] in (101, 202, 303)
+    typical = next(r for r in multi["runs"] if r["seed"] == multi["typical_seed"])
+    assert typical["summary"] == multi["summary"]
+
+    solo_body = _body(include_timeseries=True)
+    solo_body["config"]["seed"] = multi["typical_seed"]
+    solo = client.post("/simulate", json=solo_body).json()
+    assert multi["timeseries"] == solo["timeseries"]
+    assert multi["timeseries"]  # non-empty: the chart has something to draw
+
+    band = multi["timeseries_band"]
+    assert [b["time"] for b in band] == [t["time"] for t in multi["timeseries"]]
+    for b, t in zip(band, multi["timeseries"], strict=True):
+        if t["p95_latency"] is not None:
+            assert b["p95_min"] <= t["p95_latency"] <= b["p95_max"]
+
+
+def test_timeseries_band_fixed_dicts() -> None:
+    a = [{"time": 1.0, "p95_latency": 2.0}, {"time": 2.0, "p95_latency": None}]
+    b = [{"time": 1.0, "p95_latency": 5.0}, {"time": 2.0, "p95_latency": None}]
+    c = [{"time": 1.0, "p95_latency": 3.0}, {"time": 2.0, "p95_latency": 4.0}]
+    assert timeseries_band([a, b, c]) == [
+        {"time": 1.0, "p95_min": 2.0, "p95_max": 5.0},
+        {"time": 2.0, "p95_min": 4.0, "p95_max": 4.0},
+    ]
+    assert timeseries_band([a, b]) == [
+        {"time": 1.0, "p95_min": 2.0, "p95_max": 5.0},
+        {"time": 2.0, "p95_min": None, "p95_max": None},
+    ]
+    assert timeseries_band([]) == []
 
 
 def test_api_multi_run_validations(client: TestClient) -> None:

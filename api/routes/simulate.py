@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException
 from api.schemas import SimulateRequest, SimulateResponse
 from sim_core import CloudSimulator, resilience_profile, typical_index
 from sim_core.playbooks import get_playbook
+from sim_core.profile import timeseries_band
 
 router = APIRouter(tags=["simulate"])
 
@@ -67,22 +68,34 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
         return _single_run_response(config, payload.include_report_png, payload.include_timeseries)
 
     runs: List[dict[str, Any]] = []
+    series: List[List[dict[str, Any]]] = []
     for seed in seed_list:
         # SimulationConfig is frozen → copy with the per-run seed. Deep so
         # no nested config state is shared between runs.
         run_config = config.model_copy(deep=True, update={"seed": seed})
-        runs.append({"seed": seed, "summary": CloudSimulator(run_config).run()})
+        simulator = CloudSimulator(run_config)
+        runs.append({"seed": seed, "summary": simulator.run()})
+        if payload.include_timeseries:
+            series.append(simulator.collector.timeseries())
 
     summaries = [run["summary"] for run in runs]
-    return {
+    typical = typical_index(summaries)
+    response: dict[str, Any] = {
         "seeds": seed_list,
         "runs": runs,
         "profile": resilience_profile(summaries, seeds=seed_list),
         # Shared across runs: the effective schedule (config + playbook).
         "chaos": [event.model_dump(mode="json") for event in config.chaos],
         # The typical run (middle by resilience score) is the headline.
-        "summary": summaries[typical_index(summaries)],
+        "summary": summaries[typical],
+        "typical_seed": seed_list[typical],
     }
+    if payload.include_timeseries:
+        # The timeline follows the headline: the typical run's ticks, plus
+        # the P95 range across every seed as a confidence band behind it.
+        response["timeseries"] = series[typical]
+        response["timeseries_band"] = timeseries_band(series)
+    return response
 
 
 def _resolve_seed_list(

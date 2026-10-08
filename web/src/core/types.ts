@@ -223,6 +223,17 @@ export interface SimulateResponse {
   runs?: Array<{ seed: number; summary: Summary }> | null;
   /** worst/typical/best across the seeds (see `sim_core/profile.py`). */
   profile?: ResilienceProfile | null;
+  /** Multi-seed only: the seed the headline `summary` and `timeseries` came from. */
+  typical_seed?: number | null;
+  /** Multi-seed + timeline only: P95 range across every seed, per tick. */
+  timeseries_band?: TimelineBandTick[] | null;
+}
+
+/** One `timeseries_band()` entry (see `sim_core/profile.py`). */
+export interface TimelineBandTick {
+  time: number;
+  p95_min: number | null;
+  p95_max: number | null;
 }
 
 /** One metric's worst/typical/best (keys mirror `sim_core/profile.py`). */

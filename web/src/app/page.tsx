@@ -197,12 +197,21 @@ export default function HomePage() {
             />
           </Panel>
 
-          <Panel title="Timeline" aside="latency vs chaos, one clock">
+          <Panel
+            title="Timeline"
+            aside={
+              result.typical_seed != null
+                ? `typical run · seed ${result.typical_seed}`
+                : "latency vs chaos, one clock"
+            }
+          >
             <TimelineChart
               ticks={result.timeseries ?? []}
               slaTarget={config.sla_target}
               windows={chaosWindows(result.chaos, config.traffic.duration)}
               horizon={config.traffic.duration}
+              band={result.timeseries_band}
+              seedCount={result.seeds?.length}
             />
           </Panel>
 
