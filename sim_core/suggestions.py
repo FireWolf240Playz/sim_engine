@@ -119,7 +119,7 @@ def build_suggestions(
         elif status == "oversized":
             proposed = max(_MIN_CAPACITY, int(current * (1.0 - _OVERSIZED_STEP_FRACTION)))
             if proposed >= current:
-                continue  # ×1 has nothing to cut
+                continue  # a single slot has nothing to cut
             if util_known and mean_util * current / proposed > TARGET_UTILIZATION:
                 continue  # the cut would overload the node: never suggest it
             reason = _cut_reason(name, current, proposed, mean_util, util_known)

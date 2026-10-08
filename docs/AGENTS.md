@@ -77,14 +77,15 @@ this repo.
 |---|---|---|
 | `config.py` | 22 | **All Pydantic models.** `SimulationConfig`, `GraphTopologyConfig`, `Edge`, `TrafficPattern`, `ChaosEvent`, `ComponentRole`. Open for: adding a config field, a validation rule. Grep the class name; never read whole. Note `TopologyConfig` is the legacy 4-node shape kept for compatibility — `.to_graph()` converts it to `GraphTopologyConfig`, which is what the engine actually runs. |
 | `topology.py` | 11 | **Live SimPy wrappers.** `Component` (owns the `simpy.Resource`, `apply_capacity_drop`, `apply_latency_spike`, `apply_hit_rate_drop`, `draw_service_time`) and `Topology` (the graph: `component()`, `outgoing_edges()`, `cache()`). Open for: anything about live capacity or service time. |
-| `engine.py` | 11 | **`CloudSimulator`** — owns `simpy.Environment`, `serve_request()`, `_walk()` (the DAG traversal, cache hit/miss, fan-out probabilities), `_use_component()` (acquire/timeout/retry/release). `run()` attaches `summary["suggestions"]` after `summary()` (it has the node configs; `MetricsCollector.summary()` alone does not carry the key). Open for: how a request moves through the graph. |
+| `engine.py` | 11 | **`CloudSimulator`** — owns `simpy.Environment`, `serve_request()`, `_walk()` (the DAG traversal, cache hit/miss, fan-out probabilities), `_use_component()` (acquire/timeout/retry/release). `run(suggest=True)` attaches `summary["suggestions"]` and `summary["fix_outcome"]` from `rightsize.plan_fix` after `summary()` (it has the node configs; `MetricsCollector.summary()` alone carries neither key). Verification re-runs use `suggest=False`. Open for: how a request moves through the graph. |
 | `traffic.py` | 3 | Poisson arrivals following the configured profile. Small, read it whole. |
 | `chaos.py` | 4 | The three injectors: `component_failure`, `network_latency`, `cache_outage`. Small, read it whole. |
 | `metrics.py` | 16 | `RequestRecord`, `UtilizationSample`, `MetricsCollector`. **`summary()` and `timeseries()` are the contract above.** Open for: adding a metric. |
-| `score.py` | 17 | Pure functions on `summary()`: `resilience_score`, `cost_grade`, `cost_extrapolation`, `cost_per_completed_request`, `score_headline`, `score_color`, `score_band`, `score_explanation`. |
+| `score.py` | 18 | Pure functions on `summary()`: `resilience_score`, `cost_grade`, `cost_extrapolation`, `cost_per_completed_request`, `score_headline`, `score_color`, `score_band`, `capped_band` (a crit finding caps the band at "At risk", a warn at "Solid"), `score_explanation` (carries `band_capped_by`). |
 | `findings.py` | 21 | Pure functions on `summary()`: `build_findings` → the plain-English "why this score" verdict, `verdict_headline`. Each `Finding` has `id`, `severity`, `text`, `node?` plus optional `title`, `why`, `impact`, `evidence` (`[{label, value}]`), `recommendation`. Each rule is its own `_`-prefixed function with a threshold constant at module top. **Add a finding = add one function + register it.** |
-| `suggestions.py` | 7 | Pure: `build_suggestions(nodes, summary)` → `Suggestion` list (`node`, `param`, `current`, `proposed`, `reason`, `est_monthly_delta`). v1 is `max_capacity` only: undersized → 80% target, oversized → one 25% step down, never into overload. Contract: `tests/test_suggestions.py` (Claude-locked). |
-| `profile.py` | 6 | Multi-seed confidence: `resilience_profile` (worst/typical/best), `typical_index`. |
+| `suggestions.py` | 7 | Pure flagging formula: `build_suggestions(nodes, summary)` → `Suggestion` list (`node`, `param`, `current`, `proposed`, `reason`, `est_monthly_delta`). Says *which* nodes look off by mean utilization; it no longer sets the sizes the summary carries. |
+| `rightsize.py` | 14 | **Verified "Fix it".** `plan_fix(config, summary)` → `{suggestions, outcome}`: repair (raise whichever node removes the most crit/warn findings), clear undersized flags, then trim (smallest size that adds no finding, ≤ 0.5 score points total), all proven by re-simulating on the pinned seed. `FixOutcome` = score/band before → after, `resolved`, `unfixed`. Contract: `tests/test_suggestions.py` (locked). |
+| `profile.py` | 7 | Multi-seed confidence: `resilience_profile` (worst/typical/best), `typical_index`, `timeseries_band` (per-tick P95 min/max across seeds). |
 | `playbooks.py` | 7 | The four named incidents: `db_failover`, `cross_region_latency_spike`, `cache_eviction_storm`, `dependency_timeout_cascade`. Each is a function returning `ChaosEvent`s, targeted **by role**. Open for: adding an incident. |
 | `presets.py` | 11 | AWS/Azure/GCP small-tier component presets. Flat list of factory functions. |
 | `compare.py` | 12 | One core, three faces: `run_many`, `diff_runs`, `set_path` (dotted-path patching), `apply_provider`, `sweep`, `knee_point`. Backs `eleven compare multi-cloud|what-if|sweep`. |
@@ -102,7 +103,9 @@ the API validates by exactly the same rules as the CLI.
 
 - `main.py` — `create_app()`, CORS (currently `*`), `/health`.
 - `routes/simulate.py` — `POST /simulate`. Single run, or multi-seed when
-  `n_seeds > 1` (then also returns `seeds` / `runs` / `profile`).
+  `n_seeds > 1` (then also returns `seeds` / `runs` / `profile` /
+  `typical_seed`, and with `include_timeseries` the typical run's
+  `timeseries` plus `timeseries_band`). The single-run key set is pinned.
 - `routes/compare.py` — `POST /compare` (multi-cloud / what-if / sweep).
 - `routes/imports_api.py` — `POST /imports`.
 - `routes/playbooks.py`, `routes/presets.py` — `GET`, trivial.
@@ -129,27 +132,39 @@ the API validates by exactly the same rules as the CLI.
 - `src/core/components/` — `TopologyDiagram` (SVG graph), `TimelineChart`
   (Recharts), `StatCards`, `SizingTable`, `ConfidencePanel`, `SeverityIcon`,
   `Modal` (generic dialog), `FixDiffPanel` (1.3: before→after table, monthly
-  Δ, Copy YAML / Terraform, Apply & re-run). The verdict card is `VerdictPanel` → one
+  Δ, Copy YAML / Terraform, per-row and all-at-once Apply & re-run), `FixLog`
+  (`FixOutcomePreview`: the verified before → after; `FixHistoryList`: every
+  apply and its measured re-run). The verdict card is `VerdictPanel` → one
   `FindingCard` per finding (holds the engine `info` → frontend `ok` severity
   map, `TONE`), `ScoreGauge` (animated score ring), `ScoreTerms` (strip +
   table views of `score_explanation`), `VerdictReportModal` (full report +
-  plain-text copy).
+  plain-text copy, including the change log). The verdict's bar, icon, band
+  word and gauge share one colour, `format.ts::verdictSeverity` (the worse of
+  score and worst finding).
 - `src/core/lib/` — **helpers only, no tests here.** `format.ts` (severity maps
   + number formatting, mirrors `score.py` thresholds), `verdict.ts`
   (`buildVerdictText` for the copy button, score-point formatting),
-  `suggestions.ts` (1.3: `applySuggestions`, `buildFixDiff`, snippets,
-  dependency-free `configToYaml` whose output pytest loads through Pydantic),
+  `suggestions.ts` (1.3: `applySuggestions`, `pendingSuggestions`,
+  `buildFixDiff`, snippets, dependency-free `configToYaml` whose output
+  pytest loads through Pydantic), `fixHistory.ts` (the apply → re-run log:
+  `startRecord`, `completeRecord`, `describeRecord`, `historyText`),
+  `timeline.ts` (`withBand`: attaches the multi-seed P95 band to ticks),
   `graphLayout.ts` (pure layered-graph layout), `chaos.ts`,
   `useThemeTokens.ts`, `useReducedMotion.ts`, `themeStorage.ts`, `demo.ts`
   (the calibrated demo topology — changing its numbers invalidates the
   documented scores).
 - `src/core/state/RunStateContext.tsx` also owns `applyAndRerun(suggestions)`:
-  patches the active config and runs it through the same token-guarded path.
-- `tests/` — Vitest unit tests (6 files), one file per module,
+  patches the active config and runs it through the same token-guarded path,
+  and `fixHistory` (only an apply's own re-run completes its record; a new or
+  reset architecture starts a new log).
+- Re-runs patch in place: results stay mounted and dim while a run is in
+  flight (`.eleven-results[aria-busy]`), the gauge glides old → new, and the
+  timeline draws in only for its first data.
+- `tests/` — Vitest unit tests (8 files), one file per module,
   `npm run test:unit`.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
 
-## `tests/` — pytest, 14 files, ~210 tests
+## `tests/` — pytest, 14 files, ~220 tests
 
 Mirrors `sim_core/`: `test_engine.py`, `test_score.py`, `test_findings.py`, …
 `test_api.py` covers the FastAPI layer with `TestClient`. `test_cli.py` pins
@@ -163,10 +178,10 @@ read by `test_suggestions.py`: run the web tests first or that test skips.
 `FOUNDER_GUIDE.md` (plain-language explanation of the machine).
 **Read a single section, never the whole file.** `ROADMAP.md` is 23 KB.
 
-**Where we are:** Wave 1. 1.1 (multi-seed confidence) and 1.2 (findings +
-rich verdict card) shipped; 1.3 (right-sizing suggestions) built and in
-review (`.agents/tasks/1.3c-review-fixes.md`); 1.4 (node inspector) not
-started. Waves 2–6 untouched.
+**Where we are:** Wave 1. 1.1 (multi-seed confidence), 1.2 (findings +
+rich verdict card) and 1.3 (verified "Fix it" + change log) shipped. Next:
+1.3e verified sizing labels (`ROADMAP.md` §1.3), then 1.4 node inspector.
+Waves 2–6 untouched.
 
 ## `.agents/` — how the agents coordinate
 

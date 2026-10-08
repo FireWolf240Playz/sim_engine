@@ -10,15 +10,12 @@ product/company picture, read [FOUNDER_GUIDE.md](FOUNDER_GUIDE.md).
 
 ---
 
-> **Where we are (2026-10-08):** Wave 1. 1.1 ✅ · 1.2 ✅ (engine + rich
-> verdict card + full-report modal, API contract pinned) · 1.3 **in review**
-> (engine suggestions + Fix-it panel + apply & re-run built and green;
-> review fixes in `.agents/tasks/1.3c-review-fixes.md`) · 1.4 not started ·
-> Waves 2–6 not started.
-> Next up after 1.3 is approved: **1.4 node inspector** (pure FE — the
-> per-component data is already in `summary()["component_sizing"][node]`,
-> shown read-only in `SizingTable`; the 1.3 "fix it" panel is the button it
-> will embed).
+> **Where we are (2026-10-09):** Wave 1. 1.1 ✅ · 1.2 ✅ · 1.3 ✅ (verified
+> repair-and-trim "Fix it", before → after preview, change log in the page
+> and report) · 1.4 not started · Waves 2–6 not started.
+> Next up: **1.3e verified sizing labels** (the over/under/right-sized label
+> still comes from mean utilization and can disagree with "Fix it"; see
+> §1.3), then **1.4 node inspector**.
 
 ## 0. Current state (verified, as of 2026-10-04)
 
@@ -96,7 +93,7 @@ Everything here is pure functions over data `summary()` already carries.
   `verdict_headline` must survive the API boundary in single- and multi-seed
   runs.
 
-### 1.3 Right-sizing suggestions — "fix it" (LOCKED) — in review (built 2026-10-08)
+### 1.3 Right-sizing suggestions — "fix it" (LOCKED) — ✅ shipped (2026-10-09)
 - **Why:** one click from "it's broken" to "it's fixed" — the demo moment.
 - **BE shape:** `sim_core/suggestions.py` →
   `build_suggestions(nodes, summary) -> list[Suggestion]`; the exact rules
@@ -119,7 +116,7 @@ Everything here is pure functions over data `summary()` already carries.
   with the changed config and the flagged node no longer appears in
   findings (verify manually on the 20-node fixture); fix-diff snippet
   round-trips (YAML parses back into a valid `SimulationConfig`).
-- **Built (2026-10-08, in review):** `sim_core/suggestions.py::build_suggestions(
+- **Built, first pass (2026-10-08):** `sim_core/suggestions.py::build_suggestions(
   nodes, summary)` — capacity-only, contract pinned in
   `tests/test_suggestions.py` (27 tests): undersized → `max(current+1,
   ceil(current·mean_util/0.8))` (80% target; the p99 `recommended_capacity`
@@ -139,10 +136,40 @@ Everything here is pure functions over data `summary()` already carries.
   `tests/fixtures/suggestions_applied.yaml`, `web/tests/suggestions.test.ts`).
   Repeated apply & re-run converges — nothing ever flips a node to
   undersized.
-- **Open before ✅:** the 1.3c review fixes (stale rows after apply, per-row
-  Apply, Terraform resource name, YAML empty-mapping crash), a browser check
-  on the demo topology, and a decision on the 1.2 "recommend size-to N"
-  finding text, which still quotes the backlog-inflated number.
+- **Verified fix (2026-10-09, `sim_core/rightsize.py`):** the formula alone
+  made things worse. It cut the healthy demo's worker 6 → 4 and breached the
+  SLA, crept in 25% steps, and under every incident offered only cuts while
+  the SLA breach stayed. `plan_fix(config, summary)` now proves every size by
+  re-simulating on the same pinned seed: (1) **repair**: while crit/warn
+  findings remain, raise the node that removes the most failure, trimmed to
+  the smallest size that helps as much; (2) clear undersized flags;
+  (3) **trim** to the smallest size that adds no finding and costs ≤ 0.5
+  score points in total. Passes repeat to a fixed point, so one apply lands
+  on the end state. `summary["fix_outcome"]` is the verification run itself
+  (score/band before → after, findings resolved, findings capacity cannot
+  fix). Demo: db_failover 81.2 At risk → 99.0 Resilient (db 3 → 6);
+  dependency_timeout_cascade reports its SLA breach as not fixable by
+  capacity. A run is ~5 ms; the search adds well under a second.
+- **Verdict band (2026-10-09):** a crit finding caps the band word at
+  "At risk", a warn at "Solid" (`score.py::capped_band`,
+  `score_explanation.band_capped_by`); the web verdict uses one colour for
+  bar, icon, word and gauge.
+- **Change log (2026-10-09):** the Fix-it panel previews the verified
+  outcome; every Apply & re-run is logged (before, prediction, measured
+  re-run, findings cleared or introduced) in a "Changes applied" panel, the
+  full report, and "Copy verdict".
+- **Follow-up, 1.3e (next): verified sizing labels.** `component_sizing`
+  status still comes from mean utilization (≤ 50% "oversized", ≥ 85%
+  "undersized"), which ignores latency tails, pool size and incident
+  headroom. The demo worker reads "oversized" at 32% though a cut to 4
+  breaches the SLA; the db reads "right_sized" while it is the db_failover
+  bottleneck. Make the label the verified answer (oversized = a free cut
+  exists; undersized = repair or saturation needs a raise), keep utilization
+  as evidence, and move the sizing table, topology colours, the
+  `undersized` finding ("size-to 138" text) and the cost grade onto it.
+- **Known limit:** a fix is verified under the scenario it was found in; a
+  cut that is free under db_failover is not yet re-checked under the other
+  incidents.
 
 ### 1.4 Node inspector (pure FE, no BE)
 - **Why:** the diagram should answer "which box is the problem?" with one
