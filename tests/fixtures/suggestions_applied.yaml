@@ -1,0 +1,38 @@
+seed: 7
+duration: 60
+metrics_interval: 1
+sla_target: 2.5
+topology:
+  nodes:
+    - name: "lb"
+      role: "load_balancer"
+      max_capacity: 12
+      service_time: 0.05
+      cost_per_hour: 0.1
+    - name: "app-worker"
+      role: "worker"
+      max_capacity: 3
+      service_time: 0.4
+      cost_per_hour: 0.1
+    - name: "db"
+      role: "database"
+      max_capacity: 4
+      service_time: 0.2
+  edges:
+    - source: "lb"
+      target: "app-worker"
+      probability: 1
+    - source: "app-worker"
+      target: "db"
+      probability: 1
+traffic:
+  base_rps: 5
+  duration: 60
+  spike_rps: null
+chaos:
+  - event_type: "component_failure"
+    intensity: 1
+    start_time: 20
+    interval: 1000
+    duration: 5
+    target: "db"

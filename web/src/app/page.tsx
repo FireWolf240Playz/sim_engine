@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
 import { ConfidencePanel } from "@/core/components/ConfidencePanel";
+import { FixDiffPanel } from "@/core/components/FixDiffPanel";
 import { SizingTable } from "@/core/components/SizingTable";
 import { StatCards } from "@/core/components/StatCards";
 import { VerdictPanel } from "@/core/components/VerdictPanel";
@@ -12,6 +13,7 @@ import { TopologyDiagram } from "@/core/components/TopologyDiagram";
 import { api } from "@/core/api/client";
 import { DEMO_META, playbookTargets } from "@/core/lib/demo";
 import { chaosWindows } from "@/core/lib/chaos";
+import { pendingSuggestions } from "@/core/lib/suggestions";
 import { CONFIDENCE_SEEDS, useRunState, type RunMode } from "@/core/state/RunStateContext";
 
 const RUN_MODES: Array<{ mode: RunMode; label: string }> = [
@@ -57,6 +59,7 @@ export default function HomePage() {
     runMode,
     setRunMode,
     requestRun,
+    applyAndRerun,
     result,
     error,
     isPending,
@@ -153,6 +156,18 @@ export default function HomePage() {
         architectureLabel={architectureLabel}
         seeds={result?.seeds ?? null}
       />
+
+      {result?.summary.suggestions?.length &&
+      pendingSuggestions(config, result.summary.suggestions).length > 0 ? (
+        <Panel title="Fix it" aside="right-size, then re-run to prove it held">
+          <FixDiffPanel
+            config={config}
+            suggestions={result.summary.suggestions}
+            onApply={applyAndRerun}
+            isPending={isPending}
+          />
+        </Panel>
+      ) : null}
 
       {result?.profile ? (
         <Panel

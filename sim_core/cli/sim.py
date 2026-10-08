@@ -164,6 +164,7 @@ def _format_summary(summary: Dict[str, Any]) -> str:
                 f"size-to {info['recommended_capacity']})"
             )
     lines += _format_findings(summary.get("findings"))
+    lines += _format_suggestions(summary)
     return "\n".join(lines)
 
 
@@ -186,6 +187,43 @@ def _format_findings(findings: Any) -> list[str]:
             value = finding.get(key)
             if isinstance(value, str) and value:
                 lines.append(f"         {label:<7} {value}")
+    return lines
+
+
+def _format_suggestions(summary: Dict[str, Any]) -> list[str]:
+    """Render the "Fix it" block (roadmap 1.3): the deterministic capacity
+    changes that would right-size this run. The list rides inside
+    ``summary["suggestions"]`` (attached in ``CloudSimulator.run``), so the
+    block prints for single runs, multi-seed runs, and older JSON alike.
+    Empty list when nothing needs changing (or the key is absent), so pre-1.3
+    reports print unchanged."""
+    suggestions = summary.get("suggestions")
+    if not isinstance(suggestions, list) or not suggestions:
+        return []
+    lines: list[str] = ["", "Fix it (deterministic - apply and re-run to confirm)", "-" * 52]
+    total_delta = 0.0
+    has_delta = False
+    for suggestion in suggestions:
+        if not isinstance(suggestion, dict):
+            continue
+        node = str(suggestion.get("node", "?"))
+        current = suggestion.get("current")
+        proposed = suggestion.get("proposed")
+        direction = "size up" if proposed > current else "size down"
+        lines.append(
+            f"  - {node:<24} max_capacity {current} → {proposed} ({direction})"
+        )
+        reason = suggestion.get("reason")
+        if isinstance(reason, str) and reason:
+            lines.append(f"         {reason}")
+        delta = suggestion.get("est_monthly_delta")
+        if isinstance(delta, (int, float)) and not isinstance(delta, bool):
+            has_delta = True
+            total_delta += delta
+            lines.append(f"         est. monthly  ${delta:+.2f}")
+    if has_delta:
+        lines.append(f"  Total estimated monthly delta: ${total_delta:+.2f}")
+        lines.append("  (provisioned slots only, 24/7 x 30-day planning figure)")
     return lines
 
 
@@ -325,6 +363,10 @@ def run_multi_seed(
     if verdict:
         verdict.append(f"  (typical run, seed {seeds[typical]})")
         print("\n".join(verdict))
+    fix = _format_suggestions(summaries[typical])
+    if fix:
+        fix.append(f"  (typical run, seed {seeds[typical]})")
+        print("\n".join(fix))
 
     png = render_report(simulators[typical].collector, output_path=report_path)
     print(f"\nReport (typical run, seed {runs[typical]['seed']}) written to: {png}")

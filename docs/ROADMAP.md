@@ -10,12 +10,15 @@ product/company picture, read [FOUNDER_GUIDE.md](FOUNDER_GUIDE.md).
 
 ---
 
-> **Where we are (2026-10-07):** Wave 1. 1.1 ✅ · 1.2 engine ✅, rich verdict
-> card in flight · 1.3 and 1.4 not started · Waves 2–6 not started.
-> Next up after 1.2 lands: **1.3 right-sizing suggestions**. The basis is
-> already computed: `summary()["component_sizing"][node]` carries
-> `recommended_capacity` (ceil of p99 demand) and `status`
-> (right_sized / oversized / undersized), shown read-only in `SizingTable`.
+> **Where we are (2026-10-08):** Wave 1. 1.1 ✅ · 1.2 ✅ (engine + rich
+> verdict card + full-report modal, API contract pinned) · 1.3 **in review**
+> (engine suggestions + Fix-it panel + apply & re-run built and green;
+> review fixes in `.agents/tasks/1.3c-review-fixes.md`) · 1.4 not started ·
+> Waves 2–6 not started.
+> Next up after 1.3 is approved: **1.4 node inspector** (pure FE — the
+> per-component data is already in `summary()["component_sizing"][node]`,
+> shown read-only in `SizingTable`; the 1.3 "fix it" panel is the button it
+> will embed).
 
 ## 0. Current state (verified, as of 2026-10-04)
 
@@ -66,7 +69,7 @@ Everything here is pure functions over data `summary()` already carries.
   5 individual run summaries; `n_seeds=1` response byte-identical to today;
   CLI flag works; tests in `tests/test_profile.py`.
 
-### 1.2 Deterministic findings — "why this score" (LOCKED) — engine ✅ (2026-10-06); rich verdict card (title/why/impact/evidence/recommendation, `score_explanation`) in flight
+### 1.2 Deterministic findings — "why this score" (LOCKED) — ✅ SHIPPED (engine 2026-10-06 · rich verdict card + full-report modal 2026-10-07)
 - **Why:** the plain-English verdict a non-technical person screenshots.
   Same input ⇒ same text, always.
 - **BE shape:** `sim_core/findings.py` →
@@ -84,24 +87,62 @@ Everything here is pure functions over data `summary()` already carries.
   names link to the node inspector (Wave 3).
 - **Accept:** fixed-dict tests asserting exact finding ids/text;
   deterministic across runs (seed-pinned e2e); appears in CLI report too.
+- **Shipped (2026-10-07):** rich `Finding` fields (`title`, `why`, `impact`,
+  `evidence[]`, `recommendation`) + `verdict_headline`; `score_explanation`
+  point-by-point strip; `VerdictPanel` with animated gauge, band word,
+  severity chips and finding cards; `VerdictReportModal` (score-math table,
+  run context, Copy verdict, Esc / focus-trap). API contract pinned in
+  `tests/test_api.py` — `findings` / `score_explanation` /
+  `verdict_headline` must survive the API boundary in single- and multi-seed
+  runs.
 
-### 1.3 Right-sizing suggestions — "fix it" (LOCKED)
+### 1.3 Right-sizing suggestions — "fix it" (LOCKED) — in review (built 2026-10-08)
 - **Why:** one click from "it's broken" to "it's fixed" — the demo moment.
 - **BE shape:** `sim_core/suggestions.py` →
-  `build_suggestions(config: dict, summary: dict) -> list[Suggestion]`
-  where `Suggestion = {node, param: "max_capacity"|"service_time"|
-  "hit_rate", current, proposed, reason, est_monthly_delta?}`.
-  Derive `proposed` from utilization (e.g. cap = ceil(capacity / avg_util)
-  with a 25% safety margin for undersized; step down 25% for oversized
-  with util < 40%). Attach `est_monthly_delta` from `cost_per_hour` when
-  present (ties into 4.4 cost-of-failure later).
+  `build_suggestions(nodes, summary) -> list[Suggestion]`; the exact rules
+  are under "Built" below and pinned in `tests/test_suggestions.py`.
+  (The original sketch, "propose `recommended_capacity`" / "oversized =
+  util < 40%", was replaced on 2026-10-08: `recommended_capacity` includes
+  queue backlog and reads 138 for a 2-slot node.) `service_time` /
+  `hit_rate` suggestions are v2. `est_monthly_delta` ties into 4.4 later.
   FE applies a suggestion = mutate the config in client state → re-run.
 - **FE:** on each node card / inspector: "raise capacity 8 → 12" button +
   "apply & re-run".
+- **Fix diff (added 2026-10-08):** the applied suggestion set renders as a
+  before→after table + total est. monthly delta + a copyable snippet of the
+  changed config lines — native YAML primary, plus a clearly-labeled
+  illustrative Terraform mapping for common roles. The snippet is the
+  handoff artifact to the real environment; Eleven never mutates production
+  (a validated config is the product, live patching is out of scope).
 - **Accept:** fixed-dict tests (undersized → up, oversized → down,
   right-sized → no suggestion); applying a suggestion in the web UI re-runs
   with the changed config and the flagged node no longer appears in
-  findings (verify manually on the 20-node fixture).
+  findings (verify manually on the 20-node fixture); fix-diff snippet
+  round-trips (YAML parses back into a valid `SimulationConfig`).
+- **Built (2026-10-08, in review):** `sim_core/suggestions.py::build_suggestions(
+  nodes, summary)` — capacity-only, contract pinned in
+  `tests/test_suggestions.py` (27 tests): undersized → `max(current+1,
+  ceil(current·mean_util/0.8))` (80% target; the p99 `recommended_capacity`
+  is deliberately *not* the proposal — saturation backlog inflates it);
+  oversized → one 25% step down `max(1, floor(current·0.75))`, only when
+  it is a real cut whose predicted utilization stays ≤ 80%; right-sized →
+  none. Raises first, then cuts, name tiebreak. `est_monthly_delta` =
+  `cost_per_hour·(proposed−current)·720` (provisioned slots only), key
+  always present (`None` when no rate). The list rides on
+  `summary()["suggestions"]` (attached in `CloudSimulator.run()`), so the
+  CLI "Fix it" block, the API and every multi-seed run get it with no API
+  shape change. FE: `FixDiffPanel` (before→after table, total monthly Δ,
+  Copy YAML / Copy Terraform (illustrative), Apply & re-run through the
+  token-guarded `applyAndRerun`); the patched config becomes active
+  ("· right-sized" chip + reset back to the baseline). The YAML snippet
+  round-trips into a valid `SimulationConfig` (cross-language snapshot
+  `tests/fixtures/suggestions_applied.yaml`, `web/tests/suggestions.test.ts`).
+  Repeated apply & re-run converges — nothing ever flips a node to
+  undersized.
+- **Open before ✅:** the 1.3c review fixes (stale rows after apply, per-row
+  Apply, Terraform resource name, YAML empty-mapping crash), a browser check
+  on the demo topology, and a decision on the 1.2 "recommend size-to N"
+  finding text, which still quotes the backlog-inflated number.
 
 ### 1.4 Node inspector (pure FE, no BE)
 - **Why:** the diagram should answer "which box is the problem?" with one

@@ -1,62 +1,41 @@
-# Handoff — 2026-10-06 verdict card enrichment
-
-> This file is the live work order. Overwrite it when your context runs out.
-> Format and rules are at the bottom of `AGENTS.md`. Read that first.
+# Handoff — 2026-10-08 1.3 review fixes
 
 ## Task
-Surface the richer `Finding` fields (`title`, `why`, `impact`, `evidence`,
-`recommendation`) in the frontend verdict card, so the score explains itself
-without the reader opening the CLI.
+Make the 5 failing tests in `web/tests/suggestions.test.ts` pass and do the cleanup items in `.agents/tasks/1.3c-review-fixes.md`; nothing else.
 
 ## Open these files, in this order
-- `sim_core/findings.py` — the `Finding` TypedDict is the contract; read the
-  field list and one rule function, not the whole 20 KB file
-- `web/src/core/types.ts` — the FE mirror, currently stale (see Blocking)
-- `web/src/core/components/VerdictPanel.tsx` — the card being changed
-- `tests/test_findings.py` — add a case here for any new field
+- `.agents/tasks/1.3c-review-fixes.md` — the card: rules, failing tests, allowed files
+- `web/tests/suggestions.test.ts` — the "Review round 2" block at the bottom is the spec
+- `web/src/core/lib/suggestions.ts` — add `pendingSuggestions`; fix the Terraform map and `emitSequence`
+- `web/src/core/components/FixDiffPanel.tsx` — render pending rows, add a per-row Apply
+- `web/src/app/page.tsx` — only the panel's show/hide condition
 
 ## Done
-- Engine side: `Finding` extended with the optional fields; `verdict_headline()`
-  added (`sim_core/findings.py`)
-- `score.py` gained `score_band()` and `score_explanation()` — a point-by-point
-  decomposition of the score, available to the card but not yet rendered
+- 1.3 attempt 1 built and green; snapshot on branch `qwen/1.3-attempt-1` (`37b2d54`)
+- Docs re-synced by Claude: `docs/ROADMAP.md` §1.3 is "in review", `docs/AGENTS.md` lists the 1.3 files
 
 ## Next
-1. Extend the `Finding` interface in `web/src/core/types.ts` to match
-   `findings.py` — all five new fields optional, so single-line findings still
-   render unchanged.
-2. Render them in `VerdictPanel.tsx`: `title` as the line heading, `text` as
-   the body, `evidence` as chips, `recommendation` as the closing line. Keep
-   the existing shape when the optional fields are absent.
-3. Add a pytest case asserting a crit finding carries `evidence` and
-   `recommendation`, so the contract is pinned on the engine side.
+1. In `.agents/LOCKS.md`, delete every `qwen` and `bionic` row; add rows for the files you will edit
+2. Make the 5 tests pass
+3. Cleanup items 1–2 on the card
+4. Run Verify; append `## Result` to the card with the output tail; release locks
 
 ## Do not touch
-- `web/src/core/lib/*` and `web/tests/*` — recently refactored; the design
-  tokens now live only in `globals.css` and components must not hold hex values
-- `web/src/core/state/RunStateContext.tsx` — the run-race guard is load-bearing
+- `tests/test_suggestions.py`, `web/tests/suggestions.test.ts`, `.agents/tasks/*.md` (append `## Result` only)
+- `docs/ROADMAP.md`, `docs/AGENTS.md` — Claude marks ✅ after review
+- `RunStateContext.tsx` run-token guard, `web/src/core/lib/demo.ts`, every backend file
+- git: no commits, branches or `git add`
 
 ## Constraints discovered
-- Severity tokens differ across the boundary: the engine emits
-  `info | warn | crit`, the frontend severity system is `ok | warn | crit`.
-  `VerdictPanel` maps `info -> ok`. Keep that mapping in one place.
-- `findings.py` thresholds (`_UTILIZATION_CRIT`, `_SLA_FLOOR`,
-  `_RETRY_STORM_RATIO`, `_P95_HEADROOM_RATIO`) are module constants. The
-  frontend mirrors the *score* bands in `web/src/core/lib/format.ts`
-  (`scoreSeverity`) — if a band moves in `score.py`, that file moves too or the
-  badge disagrees with the report PNG.
-- Findings are pure functions over the `summary()` dict. Do not re-run the
-  simulation or reach for live SimPy state to compute one.
-- `web/src/core/lib/demo.ts` holds a grid-searched demo topology. Its numbers
-  are calibrated so the clean run scores 98 and each incident visibly degrades
-  it. Changing them invalidates the documented scores.
-
-## Blocking / needs a decision
-- `web/src/core/types.ts` is behind `findings.py`. Until it is updated, the new
-  fields are dropped silently by the UI — no error, just nothing rendered.
+- `tests/fixtures/suggestions_applied.yaml` is written by Vitest and loaded by pytest: run the web tests before pytest
+- Windows console can't encode `→` (cp1252); `cli/__init__.py` forces UTF-8; keep the arrow
+- A stale uvicorn silently serves old `summary()` keys; restart after engine changes
+- Design tokens only from `globals.css`; no synchronous `setState` in effects
+- PowerShell 5.1: no `&&`, chain with `;`
+- Servers: :8000/:3000 are yours; :8001/:3001 are Claude's timeline preview, leave them
 
 ## Verify with
-```bash
-pytest tests/test_findings.py -q
-cd web && npm run test:unit && npm run typecheck
+```
+cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..
+& .\venv\Scripts\python.exe -m pytest -q -rs   # green, no skips
 ```

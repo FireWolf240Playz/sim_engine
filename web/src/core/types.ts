@@ -135,6 +135,26 @@ export interface CostExtrapolation {
   year: number;
 }
 
+/**
+ * One right-sizing proposal (roadmap 1.3) — mirrors
+ * `sim_core/suggestions.py::Suggestion`. Deterministic: same input,
+ * same list, always.
+ */
+export interface Suggestion {
+  node: string;
+  /** The config field to patch (v1: always `"max_capacity"`). */
+  param: string;
+  current: number;
+  proposed: number;
+  reason: string;
+  /**
+   * Estimated monthly $ for the provisioned slots only
+   * (`cost_per_hour * (proposed - current) * 720`); `null` when the node
+   * carries no rate (nothing to project).
+   */
+  est_monthly_delta: number | null;
+}
+
 /** Shape of `POST /simulate` → `summary` (see `sim_core/metrics.py::summary`). */
 export interface Summary {
   requests: number;
@@ -167,6 +187,13 @@ export interface Summary {
   cost_metered: number;
   cost_extrapolation: CostExtrapolation | null;
   steady_state_cost_extrapolation: CostExtrapolation | null;
+  /**
+   * Deterministic "fix it" list (roadmap 1.3): the capacity changes that
+   * would right-size this run. Attached in `CloudSimulator.run()`, so it
+   * rides along on every single- and multi-seed summary. Optional because
+   * pre-1.3 payloads (e.g. stored JSON) predate the key.
+   */
+  suggestions?: Suggestion[];
 }
 
 /** One `timeseries()` tick (see `sim_core/metrics.py::timeseries`). */

@@ -12,7 +12,8 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import { DEMO_CONFIG } from "../lib/demo";
-import type { SimulateResponse, SimulationConfig } from "../types";
+import { applySuggestions } from "../lib/suggestions";
+import type { SimulateResponse, SimulationConfig, Suggestion } from "../types";
 
 /**
  * How the next run executes (roadmap 1.1):
@@ -56,6 +57,13 @@ interface RunStateValue {
   setRunMode: (mode: RunMode) => void;
   /** Fire a run; pass a playbook to switch+run in one step. */
   requestRun: (playbook?: string | null) => void;
+  /**
+   * Roadmap 1.3 — "apply & re-run": patch the active config with the
+   * suggested capacity changes and immediately run it. The patched config
+   * becomes the new active architecture, so follow-up clean or incident
+   * runs re-test the right-sized shape.
+   */
+  applyAndRerun: (suggestions: Suggestion[]) => void;
   result: SimulateResponse | null;
   error: string | null;
   isPending: boolean;
@@ -113,12 +121,21 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     setIsDemoArchitecture(true);
   }, []);
 
-  const run = useMutation<RunOutcome, never, string | null>({
-    mutationFn: async (pb) => {
+  /**
+   * The run payload. `configOverride` lets "apply & re-run" (roadmap 1.3)
+   * start a run with the patched config in the same tick — reading the
+   * `config` state inside `mutationFn` would be one render stale, so the
+   * override travels with the mutation instead.
+   */
+  type RunPayload = { pb: string | null; configOverride?: SimulationConfig };
+
+  const run = useMutation<RunOutcome, never, RunPayload>({
+    mutationFn: async ({ pb, configOverride }) => {
       const token = (runSeq.current += 1);
+      const effective = configOverride ?? config;
       try {
         const data = await api.simulate(
-          config,
+          effective,
           pb,
           runMode === "confidence" ? CONFIDENCE_SEEDS : 1,
         );
@@ -146,12 +163,36 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     (pb?: string | null) => {
       const chosen = pb === undefined ? playbook : pb;
       if (pb !== undefined) setPlaybook(pb);
-      mutate(chosen);
+      mutate({ pb: chosen });
     },
     // `mutate` is referentially stable in React Query v5; depending on the
     // whole mutation object would rebuild this callback (and the context
     // value below) on every render.
     [playbook, mutate],
+  );
+
+  /**
+   * Roadmap 1.3 — "apply & re-run": immutably patch the active config with
+   * the run's suggestions and fire a run with the patched config. The
+   * patched config becomes the active architecture (label gets a
+   * "right-sized" mark), so follow-up runs re-test the fixed shape; the
+   * run-token guard discards stale in-flight results exactly as before.
+   *
+   * The patched shape is no longer the imported/demo baseline, so it is
+   * marked as a custom architecture: the header chip then offers a reset
+   * back to the original topology instead of the static "seed 42" note.
+   */
+  const applyAndRerun = useCallback(
+    (suggestions: Suggestion[]) => {
+      const next = applySuggestions(config, suggestions);
+      setConfig(next);
+      if (!architectureLabel.includes("right-sized")) {
+        setArchitectureLabel(`${architectureLabel} · right-sized`);
+      }
+      setIsDemoArchitecture(false);
+      mutate({ pb: playbook, configOverride: next });
+    },
+    [config, architectureLabel, playbook, mutate],
   );
 
   const value = useMemo<RunStateValue>(
@@ -166,6 +207,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       runMode,
       setRunMode,
       requestRun,
+      applyAndRerun,
       result,
       error,
       isPending: run.isPending,
@@ -179,6 +221,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       playbook,
       runMode,
       requestRun,
+      applyAndRerun,
       result,
       error,
       run.isPending,

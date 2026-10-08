@@ -229,7 +229,15 @@ class CloudSimulator:
         self._spawn_processes()
         self.env.run(until=self.config.duration)
         self.collector.settle_cost(self.config.duration)
-        return self.collector.summary()
+        summary = self.collector.summary()
+        # Roadmap 1.3: ride the deterministic "fix it" list along inside the
+        # summary, so the CLI, the API, and every multi-seed profile run get
+        # it with no API shape change. Pure over (nodes, summary) — no re-run.
+        from sim_core.suggestions import build_suggestions
+
+        nodes = [node.model_dump(mode="json") for node in self.config.topology.nodes]
+        summary["suggestions"] = build_suggestions(nodes, summary)
+        return summary
 
     # -- convenience -------------------------------------------------------
     @property

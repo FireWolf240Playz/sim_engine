@@ -18,3 +18,13 @@ Quick orientation:
 Rules that are bugs if broken, in full in `docs/AGENTS.md`: Pydantic holds
 configuration and SimPy holds state; chaos must mutate the live simulation, not
 a recorded metric; real SimPy 4 API only; full type hints.
+
+## Compaction protocol
+
+Every context-compaction summary you produce — the handoff document passed to
+the next session, or a rewrite of `docs/HANDOFF.md` — must use **exactly** the
+handoff format at the bottom of `docs/AGENTS.md`: same headings, same order
+(`Task` → `Open these files, in this order` → `Done` → `Next` → `Do not touch`
+→ `Constraints discovered` → `Verify with`), one line per item, under 400
+words. A work order for the next agent, not a diary of what happened.
+No free-form sections, no extra headings, no prose paragraphs.

@@ -87,6 +87,7 @@ from sim_core.score import (
     score_explanation,
     score_headline,
 )
+from sim_core.suggestions import Suggestion, build_suggestions
 from sim_core.topology import Component, Topology
 
 __version__ = "0.1.0"
@@ -137,6 +138,9 @@ __all__ = [
     "FindingSeverity",
     "build_findings",
     "verdict_headline",
+    # Right-sizing suggestions — "fix it" (roadmap 1.3)
+    "Suggestion",
+    "build_suggestions",
     # Topology
     "Component",
     "Topology",

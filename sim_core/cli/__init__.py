@@ -50,8 +50,21 @@ _COMMAND_HANDLERS: Dict[str, Callable[[argparse.Namespace], int]] = {
 }
 
 
+def _configure_utf8_console() -> None:
+    """Force UTF-8 on the console streams so non-ASCII output (e.g. the
+    U+2192 arrow in right-sizing reasons) never crashes a Windows ``charmap``
+    (cp1252) stdout. ``errors="replace"`` means even a codec that lacks a code
+    point degrades to U+FFFD instead of raising. No-op where a stream exposes
+    no ``reconfigure`` (e.g. pytest capture objects)."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point. Returns a process exit code."""
+    _configure_utf8_console()
     args = build_parser().parse_args(argv)
 
     handler = _COMMAND_HANDLERS.get(args.command)
