@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { Finding, Summary } from "../types";
+import type { FixRecord } from "../lib/fixHistory";
 import {
   SEVERITY_BG,
   SEVERITY_TEXT,
@@ -60,8 +61,11 @@ export function VerdictPanel({
   context,
   architectureLabel,
   seeds,
+  fixHistory,
 }: {
   summary: Summary | null;
+  /** The apply → re-run log, shown and copied in the full report. */
+  fixHistory?: FixRecord[];
   /** e.g. "under db failover" or "on the clean run" — the incident in context. */
   context?: string;
   /** e.g. "demo architecture" or the user's named architecture. */
@@ -201,6 +205,7 @@ export function VerdictPanel({
           context={context}
           architectureLabel={architectureLabel}
           seeds={seeds}
+          fixHistory={fixHistory}
         />
       ) : null}
     </div>

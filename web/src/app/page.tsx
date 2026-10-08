@@ -5,6 +5,7 @@ import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
 import { ConfidencePanel } from "@/core/components/ConfidencePanel";
 import { FixDiffPanel } from "@/core/components/FixDiffPanel";
+import { FixHistoryList, FixOutcomePreview } from "@/core/components/FixLog";
 import { SizingTable } from "@/core/components/SizingTable";
 import { StatCards } from "@/core/components/StatCards";
 import { VerdictPanel } from "@/core/components/VerdictPanel";
@@ -60,6 +61,7 @@ export default function HomePage() {
     setRunMode,
     requestRun,
     applyAndRerun,
+    fixHistory,
     result,
     error,
     isPending,
@@ -72,6 +74,12 @@ export default function HomePage() {
     config.topology.nodes,
   );
   const context = playbook ? `under ${playbook.replace(/_/g, " ")}` : "on the clean run";
+  // Suggestions not yet applied to the active config. The verified outcome
+  // describes the whole set, so it shows only while that set is still
+  // pending, or when there is nothing to apply but findings capacity can't fix.
+  const suggestions = result?.summary.suggestions ?? [];
+  const pending = pendingSuggestions(config, suggestions);
+  const showOutcome = pending.length > 0 || suggestions.length === 0;
 
   return (
     <div className="flex flex-col gap-5">
@@ -158,24 +166,34 @@ export default function HomePage() {
         context={context}
         architectureLabel={architectureLabel}
         seeds={result?.seeds ?? null}
+        fixHistory={fixHistory}
       />
 
       {result ? (
         <Panel title="Fix it" aside="sizes verified by simulation on the same seed">
-          {pendingSuggestions(config, result.summary.suggestions ?? []).length ? (
+          {showOutcome && result.summary.fix_outcome ? (
+            <FixOutcomePreview outcome={result.summary.fix_outcome} />
+          ) : null}
+          {pending.length ? (
             <FixDiffPanel
               config={config}
               suggestions={result.summary.suggestions ?? []}
               onApply={applyAndRerun}
               isPending={isPending}
             />
-          ) : (
+          ) : showOutcome ? null : (
             // Kept mounted when empty, so applying a fix never makes the
             // panels below jump up the page.
             <p className="text-[13px] text-ink-dim">
               Nothing to change: every node is the right size for this load.
             </p>
           )}
+        </Panel>
+      ) : null}
+
+      {fixHistory.length ? (
+        <Panel title="Changes applied" aside="each one re-run and measured">
+          <FixHistoryList history={fixHistory} />
         </Panel>
       ) : null}
 

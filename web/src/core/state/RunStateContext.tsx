@@ -12,6 +12,7 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { ApiError, api } from "../api/client";
 import { DEMO_CONFIG } from "../lib/demo";
+import { completeRecord, startRecord, type FixRecord } from "../lib/fixHistory";
 import { applySuggestions } from "../lib/suggestions";
 import type { SimulateResponse, SimulationConfig, Suggestion } from "../types";
 
@@ -64,6 +65,8 @@ interface RunStateValue {
    * runs re-test the right-sized shape.
    */
   applyAndRerun: (suggestions: Suggestion[]) => void;
+  /** Every apply on the current architecture: before, prediction, re-run. */
+  fixHistory: FixRecord[];
   result: SimulateResponse | null;
   error: string | null;
   isPending: boolean;
@@ -105,20 +108,24 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
   const [architectureLabel, setArchitectureLabel] = useState<string>(DEMO_LABEL);
   const [isDemoArchitecture, setIsDemoArchitecture] = useState(true);
   const [runMode, setRunMode] = useState<RunMode>("single");
+  const [fixHistory, setFixHistory] = useState<FixRecord[]>([]);
 
   /** Monotonic run counter; only the newest token may write state. */
   const runSeq = useRef(0);
 
+  // A new architecture starts a new change log.
   const setArchitecture = useCallback((next: SimulationConfig, label: string) => {
     setConfig(next);
     setArchitectureLabel(label);
     setIsDemoArchitecture(false);
+    setFixHistory([]);
   }, []);
 
   const resetArchitecture = useCallback(() => {
     setConfig(DEMO_CONFIG);
     setArchitectureLabel(DEMO_LABEL);
     setIsDemoArchitecture(true);
+    setFixHistory([]);
   }, []);
 
   /**
@@ -127,7 +134,12 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
    * `config` state inside `mutationFn` would be one render stale, so the
    * override travels with the mutation instead.
    */
-  type RunPayload = { pb: string | null; configOverride?: SimulationConfig };
+  type RunPayload = {
+    pb: string | null;
+    configOverride?: SimulationConfig;
+    /** This run is the re-run of an apply: its result completes the log. */
+    fixStep?: boolean;
+  };
 
   const run = useMutation<RunOutcome, never, RunPayload>({
     mutationFn: async ({ pb, configOverride }) => {
@@ -144,16 +156,18 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
         return { token, failure: friendlyError(err) };
       }
     },
-    onSuccess: (outcome) => {
+    onSuccess: (outcome, payload) => {
       // A newer run has been started since this one — discard it.
       if (outcome.token !== runSeq.current) return;
       if ("failure" in outcome) {
         setResult(null);
         setError(outcome.failure);
+        if (payload.fixStep) setFixHistory((h) => completeRecord(h, null));
         return;
       }
       setResult(outcome.data);
       setError(null);
+      if (payload.fixStep) setFixHistory((h) => completeRecord(h, outcome.data.summary));
     },
   });
 
@@ -190,9 +204,10 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
         setArchitectureLabel(`${architectureLabel} · right-sized`);
       }
       setIsDemoArchitecture(false);
-      mutate({ pb: playbook, configOverride: next });
+      if (result) setFixHistory((h) => startRecord(h, result.summary, suggestions, playbook));
+      mutate({ pb: playbook, configOverride: next, fixStep: true });
     },
-    [config, architectureLabel, playbook, mutate],
+    [config, architectureLabel, playbook, mutate, result],
   );
 
   const value = useMemo<RunStateValue>(
@@ -208,6 +223,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       setRunMode,
       requestRun,
       applyAndRerun,
+      fixHistory,
       result,
       error,
       isPending: run.isPending,
@@ -222,6 +238,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       runMode,
       requestRun,
       applyAndRerun,
+      fixHistory,
       result,
       error,
       run.isPending,

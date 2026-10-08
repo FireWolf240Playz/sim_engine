@@ -197,6 +197,31 @@ export interface Summary {
    * pre-1.3 payloads (e.g. stored JSON) predate the key.
    */
   suggestions?: Suggestion[];
+  /** What applying every suggestion does — the verification run itself
+   * (`sim_core/rightsize.py::FixOutcome`). Null when nothing to change. */
+  fix_outcome?: FixOutcome | null;
+}
+
+/** A finding reduced to what a before → after comparison needs. */
+export interface FindingRef {
+  id: string;
+  node: string | null;
+  severity: string;
+  title: string;
+}
+
+/** Mirrors `sim_core/rightsize.py::FixOutcome`. */
+export interface FixOutcome {
+  seed: number;
+  score_before: number | null;
+  score_after: number | null;
+  band_before: string | null;
+  band_after: string | null;
+  /** crit/warn findings the suggestions clear. */
+  resolved: FindingRef[];
+  /** crit/warn findings no capacity change clears — the cause is elsewhere. */
+  unfixed: FindingRef[];
+  monthly_delta: number | null;
 }
 
 /** One `timeseries()` tick (see `sim_core/metrics.py::timeseries`). */

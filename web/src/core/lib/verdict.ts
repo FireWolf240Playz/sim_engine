@@ -1,4 +1,5 @@
 import type { Summary } from "../types";
+import { historyText, type FixRecord } from "./fixHistory";
 
 /**
  * Plain-text verdict builder — the "Copy verdict" payload and the single
@@ -8,7 +9,13 @@ import type { Summary } from "../types";
  */
 export function buildVerdictText(
   summary: Summary,
-  opts?: { architectureLabel?: string; context?: string; seeds?: number[] | null },
+  opts?: {
+    architectureLabel?: string;
+    context?: string;
+    seeds?: number[] | null;
+    /** The apply → re-run log, appended as "Changes applied". */
+    history?: FixRecord[];
+  },
 ): string {
   const lines: string[] = [];
 
@@ -41,6 +48,9 @@ export function buildVerdictText(
   if (opts?.seeds && opts.seeds.length > 1) {
     lines.push("", `confidence: ${opts.seeds.length} seeds (${opts.seeds.join(", ")})`);
   }
+
+  const changes = historyText(opts?.history ?? []);
+  if (changes) lines.push("", changes);
 
   return lines.join("\n");
 }

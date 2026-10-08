@@ -2,8 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Summary } from "../types";
+import type { FixRecord } from "../lib/fixHistory";
 import { buildVerdictText } from "../lib/verdict";
 import { FindingCard } from "./FindingCard";
+import { FixHistoryList, FixOutcomePreview } from "./FixLog";
 import { Modal } from "./Modal";
 import { ScoreTermsTable } from "./ScoreTerms";
 
@@ -58,6 +60,7 @@ export function VerdictReportModal({
   context,
   architectureLabel,
   seeds,
+  fixHistory,
 }: {
   open: boolean;
   onClose: () => void;
@@ -65,6 +68,8 @@ export function VerdictReportModal({
   context?: string;
   architectureLabel?: string;
   seeds?: number[] | null;
+  /** Every apply → re-run on this architecture (the "what we changed" log). */
+  fixHistory?: FixRecord[];
 }) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<number | null>(null);
@@ -80,7 +85,12 @@ export function VerdictReportModal({
   );
 
   async function copyVerdict() {
-    const text = buildVerdictText(summary, { architectureLabel, context, seeds });
+    const text = buildVerdictText(summary, {
+      architectureLabel,
+      context,
+      seeds,
+      history: fixHistory,
+    });
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -141,6 +151,24 @@ export function VerdictReportModal({
               )}
             </div>
           </section>
+
+          {summary.fix_outcome ? (
+            <section>
+              <SectionLabel>What Fix it would change</SectionLabel>
+              <div className="mt-3">
+                <FixOutcomePreview outcome={summary.fix_outcome} />
+              </div>
+            </section>
+          ) : null}
+
+          {fixHistory && fixHistory.length ? (
+            <section>
+              <SectionLabel>Changes applied</SectionLabel>
+              <div className="mt-3">
+                <FixHistoryList history={fixHistory} />
+              </div>
+            </section>
+          ) : null}
 
           <section>
             <SectionLabel>Run context</SectionLabel>
