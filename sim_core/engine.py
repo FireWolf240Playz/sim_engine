@@ -226,8 +226,9 @@ class CloudSimulator:
         loops, and metric sampler all contain ``while True``/bounded loops that
         are simply suspended once the clock reaches the horizon.
 
-        ``suggest`` (default on) attaches ``summary["suggestions"]``: the
-        simulation-verified right-sizing list (:mod:`sim_core.rightsize`).
+        ``suggest`` (default on) attaches ``summary["suggestions"]``, the
+        simulation-verified fix list, and ``summary["fix_outcome"]``, its
+        verified before → after (:mod:`sim_core.rightsize`).
         Riding inside the summary means the CLI, the API and every multi-seed
         run get it with no API shape change. Verification re-runs the engine
         with ``suggest=False``, which is also what stops it recursing.
@@ -237,9 +238,13 @@ class CloudSimulator:
         self.collector.settle_cost(self.config.duration)
         summary = self.collector.summary()
         if suggest:
-            from sim_core.rightsize import right_size  # local: rightsize imports this module
+            from sim_core.rightsize import plan_fix  # local: rightsize imports this module
 
-            summary["suggestions"] = right_size(self.config, summary)
+            plan = plan_fix(self.config, summary)
+            summary["suggestions"] = plan["suggestions"]
+            # Before → after of applying every suggestion, from the same
+            # verification runs: what "Fix it" will do, and what it can't.
+            summary["fix_outcome"] = plan["outcome"]
         return summary
 
     # -- convenience -------------------------------------------------------

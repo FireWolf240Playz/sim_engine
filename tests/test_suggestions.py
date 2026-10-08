@@ -50,6 +50,7 @@ from sim_core import CloudSimulator, SimulationConfig
 from sim_core.cli import main
 from sim_core.cli.sim import default_config
 from sim_core.compare import set_path
+from sim_core.playbooks import get_playbook
 from sim_core.rightsize import SCORE_TOLERANCE, right_size
 from sim_core.score import capped_band
 from sim_core.suggestions import build_suggestions
@@ -279,7 +280,9 @@ def test_summary_carries_verified_suggestions() -> None:
     summary = CloudSimulator(config).run()
     assert summary["suggestions"] == right_size(config, summary)
     raise_ = next(s for s in summary["suggestions"] if s["node"] == "app-worker")
-    assert (raise_["current"], raise_["proposed"]) == (2, 4)
+    # 2 → 8, not just past "undersized" (4): the repair phase sizes it until
+    # the run's SLA breach clears too.
+    assert (raise_["current"], raise_["proposed"]) == (2, 8)
     assert "verified by simulation" in raise_["reason"]
 
 
@@ -315,6 +318,60 @@ def test_one_apply_reaches_the_end_state() -> None:
         for s in first["suggestions"]:
             applied = set_path(applied, f"{s['node']}.{s['param']}", s["proposed"])
         assert CloudSimulator(applied).run()["suggestions"] == []
+
+
+def _applied(config: SimulationConfig, suggestions: list[Any]) -> SimulationConfig:
+    for s in suggestions:
+        config = set_path(config, f"{s['node']}.{s['param']}", s["proposed"])
+    return config
+
+
+def test_fix_repairs_an_incident_not_just_trims() -> None:
+    """The second bug: under every incident the formula offered only cuts and
+    the SLA breach stayed. db_failover must now get a db raise that clears it."""
+    config = get_playbook("db_failover").apply(_demo())
+    summary = CloudSimulator(config).run()
+    assert "crit:sla_breach" in {
+        f"{f['severity']}:{f['id']}" for f in summary["findings"]
+    }
+    raises = {s["node"]: s for s in summary["suggestions"] if s["proposed"] > s["current"]}
+    assert "db" in raises
+    assert "sla breach" in raises["db"]["reason"]
+    rerun = CloudSimulator(_applied(config, summary["suggestions"])).run(suggest=False)
+    assert not _serious(rerun)
+
+
+def test_fix_outcome_matches_the_rerun() -> None:
+    """fix_outcome is the verification run itself: applying the suggestions
+    and re-running reproduces it exactly (same pinned seed)."""
+    config = get_playbook("db_failover").apply(_demo())
+    summary = CloudSimulator(config).run()
+    outcome = summary["fix_outcome"]
+    rerun = CloudSimulator(_applied(config, summary["suggestions"])).run(suggest=False)
+    assert outcome["score_before"] == summary["resilience_score"]
+    assert outcome["score_after"] == rerun["resilience_score"]
+    assert outcome["band_after"] == rerun["score_explanation"]["band"]
+    assert {f["id"] for f in outcome["resolved"]} == {"sla_breach", "p95_headroom"}
+    assert outcome["unfixed"] == []
+
+
+def test_capacity_that_cannot_help_is_reported_unfixed() -> None:
+    """Honesty: when no raise clears a finding, it is listed as unfixed
+    instead of being hidden or 'fixed' by a pointless raise."""
+    config = get_playbook("dependency_timeout_cascade").apply(_demo())
+    outcome = CloudSimulator(config).run()["fix_outcome"]
+    assert outcome is not None
+    assert "sla_breach" in {f["id"] for f in outcome["unfixed"]}
+    assert outcome["score_after"] >= outcome["score_before"]
+
+
+def test_healthy_run_without_changes_has_no_outcome() -> None:
+    config = _demo()
+    for s in CloudSimulator(config).run()["suggestions"]:
+        config = set_path(config, f"{s['node']}.{s['param']}", s["proposed"])
+    summary = CloudSimulator(config).run()
+    assert summary["suggestions"] == []
+    assert summary["fix_outcome"] is None
 
 
 def test_raise_that_cannot_help_is_not_suggested() -> None:
