@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   GAP_X,
   NODE_H,
@@ -10,6 +10,7 @@ import {
   edgeKey,
   edgePath,
   layout,
+  layoutKey,
 } from "@/core/lib/graphLayout";
 import { DEMO_CONFIG } from "@/core/lib/demo";
 import type { TopologyEdge, TopologyNode } from "@/core/types";
@@ -191,5 +192,54 @@ describe("edgePath", () => {
   it("keeps a minimum handle length so a short hop still curves", () => {
     const d = edgePath({ key: "a|b", x1: 0, y1: 0, x2: 2, y2: 40 });
     expect(d).toContain("C 24 0");
+  });
+});
+
+// 1.3e: the diagram caches its geometry under this key, so it must change
+// exactly when `layout` / `computeEdges` could return something different.
+describe("layoutKey", () => {
+  let key = "";
+  beforeEach(() => {
+    key = layoutKey(DEMO_NODES, DEMO_EDGES);
+  });
+
+  it("ignores everything the layout does not read", () => {
+    const resized = DEMO_NODES.map((n) => ({
+      ...n,
+      max_capacity: n.max_capacity + 3,
+      service_time: n.service_time * 2,
+      role: "generic" as const,
+    }));
+    const reweighted = DEMO_EDGES.map((e) => ({ ...e, probability: 0.25 }));
+    expect(layoutKey(resized, reweighted)).toBe(key);
+  });
+
+  it("ignores edges the layout drops", () => {
+    expect(layoutKey(DEMO_NODES, [...DEMO_EDGES, edge("db", "db"), edge("db", "ghost")])).toBe(
+      key,
+    );
+  });
+
+  it("changes when a node is added, removed or renamed", () => {
+    expect(layoutKey([...DEMO_NODES, node("queue")], DEMO_EDGES)).not.toBe(key);
+    expect(layoutKey(DEMO_NODES.slice(1), DEMO_EDGES)).not.toBe(key);
+    const renamed = DEMO_NODES.map((n) => (n.name === "db" ? { ...n, name: "db2" } : n));
+    expect(layoutKey(renamed, DEMO_EDGES)).not.toBe(key);
+  });
+
+  it("changes when an edge is added or removed", () => {
+    expect(layoutKey(DEMO_NODES, DEMO_EDGES.slice(1))).not.toBe(key);
+    expect(layoutKey(DEMO_NODES, [...DEMO_EDGES, edge("lb", "db")])).not.toBe(key);
+  });
+
+  // Node order seeds the barycenter sweep and the cycle fallback.
+  it("changes when the node order changes", () => {
+    expect(layoutKey([...DEMO_NODES].reverse(), DEMO_EDGES)).not.toBe(key);
+  });
+
+  it("does not collide on names that contain the separator", () => {
+    const a = layoutKey([node("a|b"), node("c")], []);
+    const b = layoutKey([node("a"), node("b|c")], []);
+    expect(a).not.toBe(b);
   });
 });

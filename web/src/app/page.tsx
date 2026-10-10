@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
@@ -15,12 +16,24 @@ import { api } from "@/core/api/client";
 import { DEMO_META, playbookTargets } from "@/core/lib/demo";
 import { chaosWindows } from "@/core/lib/chaos";
 import { pendingSuggestions } from "@/core/lib/suggestions";
+import { fixPanelView, staleNodes, type FixPanelNote } from "@/core/lib/rerun";
 import { CONFIDENCE_SEEDS, useRunState, type RunMode } from "@/core/state/RunStateContext";
+import type { TopologyEdge } from "@/core/types";
 
 const RUN_MODES: Array<{ mode: RunMode; label: string }> = [
   { mode: "single", label: "Single run" },
   { mode: "confidence", label: `${CONFIDENCE_SEEDS}-seed confidence` },
 ];
+
+/** Stable identity for "no edges", so memo props never churn on `?? []`. */
+const NO_EDGES: TopologyEdge[] = [];
+
+/** 1.3g — the Fix-it panel's note, per fixPanelView's verdict. */
+const FIX_NOTES: Record<Exclude<FixPanelNote, null>, string> = {
+  rerunning: "Re-running with your change…",
+  applied: "Applied, not yet measured: run again to see the result.",
+  nothing: "Nothing to change: every node is the right size for this load.",
+};
 
 function EmptyState() {
   return (
@@ -63,23 +76,41 @@ export default function HomePage() {
     applyAndRerun,
     fixHistory,
     result,
+    measuredNodes,
     error,
     isPending,
   } = useRunState();
   const { data: playbooks } = useQuery({ queryKey: ["playbooks"], queryFn: api.playbooks });
 
   const sizing = result?.summary.component_sizing;
-  const { names: targetNames, wholePath } = playbookTargets(
-    playbook,
-    config.topology.nodes,
+  const targets = useMemo(
+    () => playbookTargets(playbook, config.topology.nodes),
+    [playbook, config.topology.nodes],
   );
+  const { names: targetNames, wholePath } = targets;
   const context = playbook ? `under ${playbook.replace(/_/g, " ")}` : "on the clean run";
   // Suggestions not yet applied to the active config. The verified outcome
   // describes the whole set, so it shows only while that set is still
   // pending, or when there is nothing to apply but findings capacity can't fix.
   const suggestions = result?.summary.suggestions ?? [];
   const pending = pendingSuggestions(config, suggestions);
-  const showOutcome = pending.length > 0 || suggestions.length === 0;
+
+  // 1.3g — which nodes' on-screen numbers belong to the OLD size, and what
+  // the Fix-it panel is allowed to say while they are re-measured.
+  const staleNames = useMemo(
+    () => staleNodes(measuredNodes, config.topology.nodes),
+    [measuredNodes, config.topology.nodes],
+  );
+  const stale = useMemo(
+    () => ({ names: staleNames, running: isPending }),
+    [staleNames, isPending],
+  );
+  const fixView = fixPanelView({
+    pending: pending.length,
+    suggestions: suggestions.length,
+    hasOutcome: Boolean(result?.summary.fix_outcome),
+    isPending,
+  });
 
   return (
     <div className="flex flex-col gap-5">
@@ -171,23 +202,21 @@ export default function HomePage() {
 
       {result ? (
         <Panel title="Fix it" aside="sizes verified by simulation on the same seed">
-          {showOutcome && result.summary.fix_outcome ? (
+          {fixView.outcome && result.summary.fix_outcome ? (
             <FixOutcomePreview outcome={result.summary.fix_outcome} />
           ) : null}
-          {pending.length ? (
+          {fixView.diff ? (
             <FixDiffPanel
               config={config}
-              suggestions={result.summary.suggestions ?? []}
+              suggestions={suggestions}
               onApply={applyAndRerun}
               isPending={isPending}
             />
-          ) : showOutcome ? null : (
+          ) : fixView.note !== null ? (
             // Kept mounted when empty, so applying a fix never makes the
             // panels below jump up the page.
-            <p className="text-[13px] text-ink-dim">
-              Nothing to change: every node is the right size for this load.
-            </p>
-          )}
+            <p className="text-[13px] text-ink-dim">{FIX_NOTES[fixView.note]}</p>
+          ) : null}
         </Panel>
       ) : null}
 
@@ -212,18 +241,23 @@ export default function HomePage() {
 
       {result && sizing ? (
         <>
-          <Panel
-            title="Topology"
-            aside={playbook ? `incident targets: ${wholePath ? "whole path" : targetNames.join(", ")}` : "clean run"}
-          >
-            <TopologyDiagram
-              nodes={config.topology.nodes}
-              edges={config.topology.edges ?? []}
-              sizing={sizing}
-              targetNames={targetNames}
-              wholePath={wholePath}
-            />
-          </Panel>
+          {/* eleven-live: stays at full strength while a re-run runs — only
+              the re-measured nodes and the other panels dim. */}
+          <div className="eleven-live">
+            <Panel
+              title="Topology"
+              aside={playbook ? `incident targets: ${wholePath ? "whole path" : targetNames.join(", ")}` : "clean run"}
+            >
+              <TopologyDiagram
+                nodes={config.topology.nodes}
+                edges={config.topology.edges ?? NO_EDGES}
+                sizing={sizing}
+                targetNames={targetNames}
+                wholePath={wholePath}
+                stale={stale}
+              />
+            </Panel>
+          </div>
 
           <Panel
             title="Timeline"

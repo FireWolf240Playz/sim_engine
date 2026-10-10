@@ -9,6 +9,7 @@ import {
   verdictSeverity,
   type Severity,
 } from "../lib/format";
+import { findingKeys } from "../lib/verdictView";
 import { SeverityIcon } from "./SeverityIcon";
 import { FindingCard, chipCls, findingTone } from "./FindingCard";
 import { ScoreGauge } from "./ScoreGauge";
@@ -176,8 +177,8 @@ export function VerdictPanel({
             </div>
 
             <div className="mt-5 flex flex-col gap-3">
-              {rows.map((row, index) => (
-                <FindingCard key={`${row.id}-${index}`} finding={row} />
+              {findingKeys(rows).map((key, i) => (
+                <FindingCard key={key} finding={rows[i]} />
               ))}
             </div>
           </>

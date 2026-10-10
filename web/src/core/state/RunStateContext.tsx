@@ -14,7 +14,8 @@ import { ApiError, api } from "../api/client";
 import { DEMO_CONFIG } from "../lib/demo";
 import { completeRecord, startRecord, type FixRecord } from "../lib/fixHistory";
 import { applySuggestions } from "../lib/suggestions";
-import type { SimulateResponse, SimulationConfig, Suggestion } from "../types";
+import { shareResult } from "../lib/runResult";
+import type { SimulateResponse, SimulationConfig, Suggestion, TopologyNode } from "../types";
 
 /**
  * How the next run executes (roadmap 1.1):
@@ -68,6 +69,13 @@ interface RunStateValue {
   /** Every apply on the current architecture: before, prediction, re-run. */
   fixHistory: FixRecord[];
   result: SimulateResponse | null;
+  /**
+   * 1.3g — the nodes of the config the current `result` was simulated
+   * with (null before the first measured run, or after a reset). A node
+   * whose size differs from these is "stale": its on-screen numbers
+   * belong to the old size.
+   */
+  measuredNodes: TopologyNode[] | null;
   error: string | null;
   isPending: boolean;
 }
@@ -97,7 +105,7 @@ const DEMO_LABEL = "demo topology";
  * `onSettled` covers both paths.
  */
 type RunOutcome =
-  | { token: number; data: SimulateResponse }
+  | { token: number; data: SimulateResponse; config: SimulationConfig }
   | { token: number; failure: string };
 
 export function RunStateProvider({ children }: { children: ReactNode }) {
@@ -109,6 +117,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
   const [isDemoArchitecture, setIsDemoArchitecture] = useState(true);
   const [runMode, setRunMode] = useState<RunMode>("single");
   const [fixHistory, setFixHistory] = useState<FixRecord[]>([]);
+  const [measuredConfig, setMeasuredConfig] = useState<SimulationConfig | null>(null);
 
   /** Monotonic run counter; only the newest token may write state. */
   const runSeq = useRef(0);
@@ -119,6 +128,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     setArchitectureLabel(label);
     setIsDemoArchitecture(false);
     setFixHistory([]);
+    setMeasuredConfig(null);
   }, []);
 
   const resetArchitecture = useCallback(() => {
@@ -126,6 +136,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     setArchitectureLabel(DEMO_LABEL);
     setIsDemoArchitecture(true);
     setFixHistory([]);
+    setMeasuredConfig(null);
   }, []);
 
   /**
@@ -151,7 +162,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
           pb,
           runMode === "confidence" ? CONFIDENCE_SEEDS : 1,
         );
-        return { token, data };
+        return { token, data, config: effective };
       } catch (err) {
         return { token, failure: friendlyError(err) };
       }
@@ -165,7 +176,8 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
         if (payload.fixStep) setFixHistory((h) => completeRecord(h, null));
         return;
       }
-      setResult(outcome.data);
+      setResult((prev) => shareResult(prev, outcome.data));
+      setMeasuredConfig(outcome.config);
       setError(null);
       if (payload.fixStep) setFixHistory((h) => completeRecord(h, outcome.data.summary));
     },
@@ -225,6 +237,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       applyAndRerun,
       fixHistory,
       result,
+      measuredNodes: measuredConfig ? measuredConfig.topology.nodes : null,
       error,
       isPending: run.isPending,
     }),
@@ -240,6 +253,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       applyAndRerun,
       fixHistory,
       result,
+      measuredConfig,
       error,
       run.isPending,
     ],

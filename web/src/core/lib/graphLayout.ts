@@ -40,6 +40,22 @@ function validEdges(nodes: TopologyNode[], edges: TopologyEdge[]): TopologyEdge[
   );
 }
 
+/**
+ * The diagram's geometry cache key (1.3e): changes exactly when
+ * `layout` / `computeEdges` could return something different — the node
+ * names in order (node order seeds the barycenter sweep and the cycle
+ * fallback) plus the valid edges' `[source, target]` pairs. Capacity, role,
+ * service time and edge probability are not in it: the layout never reads
+ * them. `JSON.stringify` keeps a `|` inside a name from colliding with the
+ * separator a hand-rolled join would use.
+ */
+export function layoutKey(nodes: TopologyNode[], edges: TopologyEdge[]): string {
+  return JSON.stringify([
+    nodes.map((n) => n.name),
+    validEdges(nodes, edges).map((e) => [e.source, e.target]),
+  ]);
+}
+
 interface Adjacency {
   /** target -> its sources */
   sources: Map<string, string[]>;

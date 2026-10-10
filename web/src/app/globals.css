@@ -166,11 +166,13 @@ body {
 }
 
 /* A run in flight: the previous results stay put, dimmed, instead of the
-   page blanking and re-flowing. */
-.eleven-results {
+   page blanking and re-flowing. A parent's opacity cannot be undone by a
+   child, so the CHILDREN dim — except `.eleven-live` (the topology), which
+   stays at full strength and marks only its re-measured nodes. */
+.eleven-results > * {
   transition: opacity 200ms ease;
 }
-.eleven-results[aria-busy="true"] {
+.eleven-results[aria-busy="true"] > *:not(.eleven-live) {
   opacity: 0.55;
 }
 

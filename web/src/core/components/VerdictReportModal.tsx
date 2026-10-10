@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Summary } from "../types";
 import type { FixRecord } from "../lib/fixHistory";
 import { buildVerdictText } from "../lib/verdict";
+import { findingKeys } from "../lib/verdictView";
 import { FindingCard } from "./FindingCard";
 import { FixHistoryList, FixOutcomePreview } from "./FixLog";
 import { Modal } from "./Modal";
@@ -143,7 +144,7 @@ export function VerdictReportModal({
             <SectionLabel>Findings</SectionLabel>
             <div className="mt-3 flex flex-col gap-3">
               {rows.length ? (
-                rows.map((row, index) => <FindingCard key={`${row.id}-${index}`} finding={row} />)
+                findingKeys(rows).map((key, i) => <FindingCard key={key} finding={rows[i]} />)
               ) : (
                 <p className="text-sm leading-6 text-ink-dim">
                   This run produced no requests, so there is nothing to find.

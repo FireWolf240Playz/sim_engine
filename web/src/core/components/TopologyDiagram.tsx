@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import type { ComponentRole, ComponentSizing, TopologyEdge, TopologyNode } from "../types";
+import type { ComponentRole } from "../types";
 import {
   SEVERITY_BG,
   SEVERITY_BORDER,
@@ -20,8 +20,16 @@ import {
   edgeKey,
   edgePath,
   layout,
-  type Positioned,
+  layoutKey,
 } from "../lib/graphLayout";
+import {
+  nodeViews,
+  type NodeViewModel,
+  type TopologyDiagramProps,
+} from "../lib/topologyView";
+
+/** The memo props of one node card: flat view + position. */
+type NodeBodyProps = NodeViewModel & { x: number; y: number };
 
 const MONO = "IBM Plex Mono, ui-monospace, monospace";
 
@@ -101,14 +109,21 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-interface Props {
-  nodes: TopologyNode[];
-  edges: TopologyEdge[];
-  sizing: Record<string, ComponentSizing>;
-  /** Node names the selected incident targets (empty = clean run). */
-  targetNames: string[];
-  /** True for whole-path incidents (latency spike, cascade tail). */
-  wholePath: boolean;
+/** The card's tooltip, from the view model alone (primitives only). */
+function tooltipFor(view: NodeViewModel): string {
+  const parts: string[] = [
+    `${view.name} — ${view.role.replace(/_/g, " ")}, ×${view.capacity} capacity`,
+  ];
+  if (view.status !== null && view.meanUtil !== null) {
+    parts.push(
+      `${view.status.replace("_", "-")}: mean ${fmtPct(view.meanUtil, 0)} · p95 ${fmtPct(
+        view.p95Util ?? 0,
+        0,
+      )} · p95 queue ${view.p95Queue ?? 0} · recommended ×${view.recommended ?? 0}`,
+    );
+  }
+  if (view.isTarget) parts.push("incident target");
+  return parts.join(" · ");
 }
 
 /**
@@ -120,45 +135,71 @@ interface Props {
  * The card is focusable (`tabIndex=0` on an SVG `<g>` with a role), so
  * the connection-tracing focus state is reachable by keyboard and not
  * hover-only.
+ *
+ * 1.3e split (1.3f simplified): `NodeShell` is the plain,
+ * state-carrying half (focus, hover, dim, the active emphasis overlay) and
+ * re-renders freely; `NodeBody` is the `memo`'d picture that draws only
+ * from flat view props + `x`, `y` — with default compare, so hover and
+ * unrelated re-renders skip it, and a changed node redraws only itself.
  */
-function NodeView({
-  p,
-  info,
-  isTarget,
-  inPath,
+function NodeShell({
+  view,
+  x,
+  y,
   dimmed,
   isActive,
   onActivate,
 }: {
-  p: Positioned;
-  info: ComponentSizing | undefined;
-  isTarget: boolean;
-  /** Whole-path incident: soft halo on every node in the blast radius. */
-  inPath: boolean;
+  view: NodeViewModel;
+  x: number;
+  y: number;
   /** Focus is active elsewhere and this node is NOT in the focused subgraph. */
   dimmed: boolean;
   /** This is the pointed-at / focused node (accent stroke emphasis). */
   isActive: boolean;
   onActivate: (name: string | null) => void;
 }) {
-  const { node, x, y } = p;
-  const severity = info ? sizingSeverity(info.status) : null;
-  const util = info?.mean_utilization ?? 0;
-  const trackW = NODE_W - 18;
-  const roleLabel = node.role.replace(/_/g, " ");
+  return (
+    <g
+      role="group"
+      tabIndex={0}
+      aria-label={tooltipFor(view)}
+      opacity={dimmed ? 0.22 : 1}
+      style={{ transition: "opacity 160ms ease" }}
+      className="outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      onMouseEnter={() => onActivate(view.name)}
+      onMouseLeave={() => onActivate(null)}
+      onFocus={() => onActivate(view.name)}
+      onBlur={() => onActivate(null)}
+    >
+      <NodeBody {...view} x={x} y={y} />
+      {isActive ? (
+        // emphasis overlay: same box, the accent stroke that today changes
+        // the card's own stroke — kept here so the memo'd body never sees it
+        <rect
+          x={x}
+          y={y}
+          width={NODE_W}
+          height={NODE_H}
+          rx={10}
+          fill="none"
+          className={SURFACE.accentStroke}
+          strokeWidth={1.6}
+        />
+      ) : null}
+    </g>
+  );
+}
 
-  const tooltip = [
-    `${node.name} — ${roleLabel}, ×${node.max_capacity} capacity`,
-    info
-      ? `${info.status.replace("_", "-")}: mean ${fmtPct(info.mean_utilization, 0)} · p95 ${fmtPct(
-          info.p95_utilization,
-          0,
-        )} · p95 queue ${info.p95_queue} · recommended ×${info.recommended_capacity}`
-      : null,
-    isTarget ? "incident target" : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+/** The drawable half of the card: halos, ring, card, chip, glyph, texts, bar. */
+export const NodeBody = memo(function NodeBody({ x, y, ...view }: NodeBodyProps) {
+  const severity = view.status ? sizingSeverity(view.status) : null;
+  const util = view.meanUtil ?? 0;
+  const trackW = NODE_W - 18;
+  // 1.3g — this node's size moved since the numbers were measured. The
+  // old size's tint, word and bar must not pass as current: neutral card,
+  // dashed accent stroke, and the card says what it is (or isn't).
+  const remeasuring = view.remeasure !== null;
 
   const halo = {
     x: x - 5,
@@ -170,28 +211,12 @@ function NodeView({
   };
 
   return (
-    <g
-      role="group"
-      tabIndex={0}
-      aria-label={tooltip}
-      opacity={dimmed ? 0.22 : 1}
-      style={{ transition: "opacity 160ms ease" }}
-      className="outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-      onMouseEnter={() => onActivate(node.name)}
-      onMouseLeave={() => onActivate(null)}
-      onFocus={() => onActivate(node.name)}
-      onBlur={() => onActivate(null)}
-    >
-      <title>{tooltip}</title>
-      {isTarget ? (
+    <>
+      <title>{tooltipFor(view)}</title>
+      {view.isTarget ? (
         <>
           {/* soft halo */}
-          <rect
-            {...halo}
-            className={SURFACE.accentStroke}
-            strokeOpacity={0.16}
-            strokeWidth={4}
-          />
+          <rect {...halo} className={SURFACE.accentStroke} strokeOpacity={0.16} strokeWidth={4} />
           {/* rotating dashed ring: the incident is "locked on" this node */}
           <rect
             {...halo}
@@ -200,14 +225,9 @@ function NodeView({
             strokeDasharray="5 7"
           />
         </>
-      ) : inPath ? (
+      ) : view.inPath ? (
         // blast radius, not the victim: halo only, no ring
-        <rect
-          {...halo}
-          className={SURFACE.accentStroke}
-          strokeOpacity={0.1}
-          strokeWidth={3}
-        />
+        <rect {...halo} className={SURFACE.accentStroke} strokeOpacity={0.1} strokeWidth={3} />
       ) : null}
 
       <rect
@@ -216,15 +236,12 @@ function NodeView({
         width={NODE_W}
         height={NODE_H}
         rx={10}
-        className={`${severity ? SEVERITY_FILL_SOFT[severity] : SURFACE.card} ${
-          isActive
-            ? SURFACE.accentStroke
-            : severity
-              ? SEVERITY_STROKE[severity]
-              : SURFACE.cardStroke
+        className={remeasuring ? `${SURFACE.card} stroke-accent` : `${severity ? SEVERITY_FILL_SOFT[severity] : SURFACE.card} ${
+          severity ? SEVERITY_STROKE[severity] : SURFACE.cardStroke
         }`}
-        strokeOpacity={isActive ? 1 : severity ? 0.4 : 1}
-        strokeWidth={isActive ? 1.6 : 1}
+        strokeOpacity={remeasuring ? 0.8 : severity ? 0.4 : 1}
+        strokeWidth={1}
+        strokeDasharray={remeasuring ? "4 4" : undefined}
       />
       <rect
         x={x + 9}
@@ -236,7 +253,7 @@ function NodeView({
         strokeWidth={1}
       />
       <RoleGlyph
-        role={node.role}
+        role={view.role}
         x={x + 15}
         y={y + 15}
         strokeClass={severity ? SEVERITY_STROKE[severity] : SURFACE.dimStroke}
@@ -251,10 +268,44 @@ function NodeView({
         fontWeight={600}
         letterSpacing="0.01em"
       >
-        {truncate(node.name, 13)}
+        {truncate(view.name, 13)}
       </text>
 
-      {severity && info ? (
+      {remeasuring ? (
+        // no size to speak of yet: track stays, the fill does not
+        <>
+          <text
+            x={x + 46}
+            y={y + 37}
+            className={SURFACE.dim}
+            fontSize={8}
+            fontWeight={600}
+            letterSpacing="0.14em"
+            fontFamily="Inter, system-ui, sans-serif"
+          >
+            {view.remeasure === "running" ? "MEASURING…" : "NOT MEASURED"}
+          </text>
+          <text
+            x={x + NODE_W - 9}
+            y={y + 37}
+            textAnchor="end"
+            className={SURFACE.dim}
+            fontSize={10}
+            fontFamily={MONO}
+          >
+            —
+          </text>
+          <rect
+            x={x + 9}
+            y={y + 45}
+            width={trackW}
+            height={4}
+            rx={2}
+            className={SURFACE.track}
+            fillOpacity={0.7}
+          />
+        </>
+      ) : severity ? (
         <>
           <text
             x={x + 46}
@@ -265,7 +316,7 @@ function NodeView({
             letterSpacing="0.14em"
             fontFamily="Inter, system-ui, sans-serif"
           >
-            {info.status.replace("_", "-").toUpperCase()}
+            {view.status?.replace("_", "-").toUpperCase()}
           </text>
           <text
             x={x + NODE_W - 9}
@@ -275,7 +326,7 @@ function NodeView({
             fontSize={10}
             fontFamily={MONO}
           >
-            {fmtPct(info.mean_utilization, 0)}
+            {fmtPct(view.meanUtil ?? 0, 0)}
           </text>
           <rect
             x={x + 9}
@@ -298,6 +349,42 @@ function NodeView({
           ) : null}
         </>
       ) : null}
+    </>
+  );
+});
+
+interface EdgeViewProps {
+  d: string;
+  title: string;
+  /** Spans more than one column — drawn quieter and thinner. */
+  long: boolean;
+  /** Not dimmed by an active focus trace. */
+  lit: boolean;
+  /** Part of the focused subgraph — accent, not edge grey. */
+  emphasized: boolean;
+}
+
+/** One flow line: quiet base line + slow accent dash drifting source → target. */
+export function EdgeView({ d, title, long, lit, emphasized }: EdgeViewProps) {
+  return (
+    <g opacity={lit ? (long ? 0.55 : 1) : 0.08} style={{ transition: "opacity 160ms ease" }}>
+      <title>{title}</title>
+      <path
+        d={d}
+        fill="none"
+        className={emphasized ? SURFACE.accentStroke : SURFACE.edge}
+        strokeOpacity={emphasized ? 0.9 : 1}
+        strokeWidth={emphasized ? 2 : long ? 1.1 : 1.5}
+      />
+      <path
+        d={d}
+        fill="none"
+        className={`${SURFACE.accentStroke} eleven-edge-flow`}
+        strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeDasharray="4 10"
+      />
     </g>
   );
 }
@@ -313,19 +400,45 @@ function NodeView({
  * instead. A `viewBox` alone made a wide graph on a phone shrink 12px
  * labels to roughly 4px, i.e. a picture of a diagram rather than a
  * diagram.
+ *
+ * 1.3f: plain `memo` — unchanged result parts keep their identity
+ * (`runResult.ts`), so a fresh-but-equal response or an unrelated page
+ * re-render leaves the whole diagram alone by default compare. Hover is
+ * this component's own state: it re-renders the shells and edges, and
+ * `NodeBody` skips. Geometry is cached under `layoutKey` because it changes
+ * exactly when the node names/order or the valid edge pairs change.
  */
-export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }: Props) {
+export const TopologyDiagram = memo(function TopologyDiagram({
+  nodes,
+  edges,
+  sizing,
+  targetNames,
+  wholePath,
+  stale,
+}: TopologyDiagramProps) {
   const [active, setActive] = useState<string | null>(null);
-  const positioned = layout(nodes, edges);
-  if (positioned.length === 0) return null;
 
-  const { width, height } = canvasSize(positioned);
+  const key = layoutKey(nodes, edges);
+  const geometry = useMemo(
+    () => {
+      const positioned = layout(nodes, edges);
+      if (positioned.length === 0) return null;
+      const { width, height } = canvasSize(positioned);
+      // Positions cached by NAME, never the node object: a cached
+      // `Positioned.node` would show the old capacity after a downsize.
+      const positions = new Map<string, { x: number; y: number; col: number }>();
+      for (const p of positioned) positions.set(p.node.name, { x: p.x, y: p.y, col: p.col });
+      return { width, height, positions, edgeGeoms: computeEdges(positioned, edges) };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` changes exactly when layout()/computeEdges() could return different geometry (node names + order, valid edge pairs); capacity, role, service time and probability are deliberately not in it, so a resize keeps the cached positions, and positions are cached by name so no stale node object is ever served.
+    [key],
+  );
+  if (geometry === null) return null;
+  const { width, height, positions, edgeGeoms } = geometry;
 
-  const flagged = new Set(targetNames);
-  const edgeGeoms = computeEdges(positioned, edges);
-
+  const views = nodeViews(nodes, sizing, targetNames, wholePath, stale);
+  const viewOf = new Map(views.map((v) => [v.name, v] as const));
   const metaOf = new Map(edges.map((e) => [edgeKey(e), e] as const));
-  const colOf = new Map(positioned.map((p) => [p.node.name, p.col] as const));
 
   // Focus tracing: pointing at (or tabbing to) a node keeps it, its direct
   // neighbors, and the edges between them at full strength and fades
@@ -358,55 +471,39 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
             wholePath ? "whole path" : targetNames.join(", ") || "none"
           }`}
         >
-          {/* edges first, so nodes sit on top of the lines: a quiet base line
-              plus a slow accent dash drifting source → target (the request
-              flow) — motion that means "traffic is moving" */}
+          {/* edges first, so nodes sit on top of the lines */}
           {edgeGeoms.map((g) => {
             const meta = metaOf.get(g.key);
             const long = meta
-              ? Math.abs((colOf.get(meta.target) ?? 0) - (colOf.get(meta.source) ?? 0)) > 1
+              ? Math.abs(
+                  (positions.get(meta.target)?.col ?? 0) - (positions.get(meta.source)?.col ?? 0),
+                ) > 1
               : false;
             const lit = !active || focusEdges.has(g.key);
             const emphasized = active !== null && focusEdges.has(g.key);
-            const d = edgePath(g);
             return (
-              <g
+              <EdgeView
                 key={g.key}
-                opacity={lit ? (long ? 0.55 : 1) : 0.08}
-                style={{ transition: "opacity 160ms ease" }}
-              >
-                <title>
-                  {meta ? `${meta.source} → ${meta.target} · p=${meta.probability}` : g.key}
-                </title>
-                <path
-                  d={d}
-                  fill="none"
-                  className={emphasized ? SURFACE.accentStroke : SURFACE.edge}
-                  strokeOpacity={emphasized ? 0.9 : 1}
-                  strokeWidth={emphasized ? 2 : long ? 1.1 : 1.5}
-                />
-                <path
-                  d={d}
-                  fill="none"
-                  className={`${SURFACE.accentStroke} eleven-edge-flow`}
-                  strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
-                  strokeWidth={1.5}
-                  strokeLinecap="round"
-                  strokeDasharray="4 10"
-                />
-              </g>
+                d={edgePath(g)}
+                title={meta ? `${meta.source} → ${meta.target} · p=${meta.probability}` : g.key}
+                long={long}
+                lit={lit}
+                emphasized={emphasized}
+              />
             );
           })}
 
-          {positioned.map((p) => {
-            const name = p.node.name;
+          {Array.from(positions.keys()).map((name) => {
+            const view = viewOf.get(name);
+            if (!view) return null;
+            const pos = positions.get(name);
+            if (!pos) return null;
             return (
-              <NodeView
+              <NodeShell
                 key={name}
-                p={p}
-                info={sizing[name]}
-                isTarget={flagged.has(name)}
-                inPath={wholePath}
+                view={view}
+                x={pos.x}
+                y={pos.y}
                 dimmed={active !== null && !focusNodes.has(name)}
                 isActive={active === name}
                 onActivate={setActive}
@@ -438,4 +535,4 @@ export function TopologyDiagram({ nodes, edges, sizing, targetNames, wholePath }
       </div>
     </div>
   );
-}
+});
