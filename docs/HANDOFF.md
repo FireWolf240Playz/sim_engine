@@ -1,34 +1,33 @@
-# Handoff — 2026-10-09 1.3 shipped; waiting for the 1.3e card
+# Handoff — 2026-10-10 1.3h verified sizing labels (card in preparation)
 
 ## Task
-No active task. Wait for `.agents/tasks/1.3e-*.md` (verified sizing labels) before editing anything.
+Wait. The 1.3h card and its failing tests are being written; start only when `.agents/tasks/1.3h-*.md` exists and this file points at it.
 
 ## Open these files, in this order
-- `docs/ROADMAP.md` §1.3 — "Follow-up, 1.3e" is the next item's spec
-- `docs/AGENTS.md` — the map was re-synced for 1.3 (rightsize.py, fix log, timeline band)
+- `docs/ROADMAP.md` §1.3, "Follow-up, 1.3h" — what the sizing label must become
+- `sim_core/suggestions.py` and `sim_core/rightsize.py` — where the label and the verified fix come from today
 
 ## Done
-- 1.3 shipped: verified repair-and-trim "Fix it" (`sim_core/rightsize.py`), outcome preview + change log (`web/src/core/components/FixLog.tsx`)
-- 1.3c review fixes merged (pendingSuggestions, per-row Apply, Terraform name, YAML empty mapping)
-- Multi-seed timeline renders the typical run plus a P95 band
+- 1.3e–1.3g render streamlining shipped: `shareResult`, two plain `memo`s (`TopologyDiagram`, `NodeBody`), `findingKeys`, stale-node marking, no whole-page dim
+- Attempt snapshots are local branches only, never pushed
 
 ## Next
-1. Read the 1.3e card when it lands; take locks first
-2. Make its failing tests pass; append `## Result`
+1. Card author: measure the label disagreement on the demo, prototype the fix, write the 1.3h card + failing tests
+2. Executor: take lock rows, follow the card's steps in order, append `## Result`
+3. Still owed from 1.3g: the by-eye checks (MEASURING…, NOT MEASURED, light and dark) on the next dev-server session
 
 ## Do not touch
-- `tests/test_suggestions.py`, `web/tests/suggestions.test.ts` — locked spec
-- `RunStateContext.tsx` run-token guard, `web/src/core/lib/demo.ts`
-- git: no commits, branches or `git add`
+- Every `web/tests/*.test.ts` and `tests/test_*.py` — locked contracts
+- No new `memo`, no comparators without a measured number on the card
+- git: the executor makes no commits, branches or `git add`
 
 ## Constraints discovered
-- `summary["suggestions"]` is no longer the formula: `CloudSimulator.run()` attaches `plan_fix` output; the formula is `build_suggestions`, used only for flagging
-- Verification re-runs call `run(suggest=False)`; never call `run()` from inside `rightsize.py`
-- Vitest writes `tests/fixtures/suggestions_applied.yaml`; run web tests before pytest
-- PowerShell 5.1: no `&&`, chain with `;`
+- `_suggestions` only proposes a size that differs from the current one, so pending == suggestions right after a successful run
+- `tsc` type-checks `web/tests/`; a card's Verify names which errors are allowed
+- PowerShell 5.1: chain with `;`, never `&&`
 
 ## Verify with
 ```
-cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..
+cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..   # 136/136, no errors
 & .\venv\Scripts\python.exe -m pytest -q -rs   # green, no skips
 ```

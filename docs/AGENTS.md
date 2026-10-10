@@ -149,7 +149,11 @@ the API validates by exactly the same rules as the CLI.
   pytest loads through Pydantic), `fixHistory.ts` (the apply → re-run log:
   `startRecord`, `completeRecord`, `describeRecord`, `historyText`),
   `timeline.ts` (`withBand`: attaches the multi-seed P95 band to ticks),
-  `graphLayout.ts` (pure layered-graph layout), `chaos.ts`,
+  `graphLayout.ts` (pure layered-graph layout), `topologyView.ts`
+  (`nodeViews`: the diagram's per-node primitive view model),
+  `runResult.ts` (`shareResult`: a new result reuses unchanged parts of the
+  old one, so plain `memo` skips), `verdictView.ts` (`findingKeys`: stable
+  id+node keys for the finding cards), `chaos.ts`,
   `useThemeTokens.ts`, `useReducedMotion.ts`, `themeStorage.ts`, `demo.ts`
   (the calibrated demo topology — changing its numbers invalidates the
   documented scores).
@@ -179,8 +183,9 @@ read by `test_suggestions.py`: run the web tests first or that test skips.
 **Read a single section, never the whole file.** `ROADMAP.md` is 23 KB.
 
 **Where we are:** Wave 1. 1.1 (multi-seed confidence), 1.2 (findings +
-rich verdict card) and 1.3 (verified "Fix it" + change log) shipped. Next:
-1.3e verified sizing labels (`ROADMAP.md` §1.3), then 1.4 node inspector.
+rich verdict card), 1.3 (verified "Fix it" + change log) and 1.3e–1.3g
+(render streamlining) shipped. Next: 1.3h verified sizing labels (`ROADMAP.md`
+§1.3), then 1.4 node inspector.
 Waves 2–6 untouched.
 
 ## `.agents/` — how the agents coordinate

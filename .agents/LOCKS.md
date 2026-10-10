@@ -11,9 +11,8 @@ Format: one row per active claim. `Since` is a date, not a guess.
 | `tests/test_suggestions.py` | claude | 2026-10-08 | 1.3 acceptance contract — qwen makes it pass, never edits it |
 | `web/tests/suggestions.test.ts` | claude | 2026-10-08 | 1.3 FE acceptance contract — qwen makes it pass, never edits it |
 | `.agents/tasks/1.3-right-sizing.md`, `1.3b-fix-diff-frontend.md`, `1.3c-review-fixes.md` | claude | 2026-10-08 | 1.3 task cards (qwen appends `## Result` only) |
-| `web/src/core/lib/suggestions.ts` | bionic | 2026-10-08 | 1.3c: `pendingSuggestions` + terraform map + `configToYaml` empty-map fix |
-| `web/src/core/components/FixDiffPanel.tsx` | bionic | 2026-10-08 | 1.3c: render pending rows + per-row Apply |
-| `web/src/app/page.tsx` | bionic | 2026-10-08 | 1.3c: panel show/hide on pending only |
+| `web/tests/topologyView.test.ts`, `graphLayout.test.ts`, `runResult.test.ts`, `verdictView.test.ts`, `rerun.test.ts` | claude | 2026-10-09 | 1.3e–1.3g acceptance contracts — qwen makes them pass, never edits them |
+| `.agents/tasks/1.3e-topology-memo.md`, `1.3f-simplify-render.md`, `1.3g-rerun-feedback.md` | claude | 2026-10-09 | render task cards (qwen appends `## Result` only) |
 
 > **Claude, 2026-10-08:** the `api/` row is superseded. A top-level key
 > breaks `tests/test_profile.py`. `suggestions` goes inside `summary()` (via
