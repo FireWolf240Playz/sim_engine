@@ -12,11 +12,9 @@ product/company picture, read [FOUNDER_GUIDE.md](FOUNDER_GUIDE.md).
 
 > **Where we are (2026-10-10):** Wave 1. 1.1 ✅ · 1.2 ✅ · 1.3 ✅ (verified
 > repair-and-trim "Fix it", before → after preview, change log in the page
-> and report; 1.3e–1.3g render streamlining ✅) · 1.4 not started · Waves
-> 2–6 not started.
-> Next up: **1.3h verified sizing labels** (the over/under/right-sized label still
-> comes from mean utilization and can disagree with "Fix it"), then
-> **1.4 node inspector**.
+> and report; 1.3e–1.3g render streamlining ✅; 1.3h verified sizing
+> labels ✅) · 1.4 node inspector ✅ · **Wave 1 done.** Waves 2–6 not started.
+> Next up: **Wave 2, 2.1 export center**.
 
 ## 0. Current state (verified, as of 2026-10-04)
 
@@ -169,7 +167,7 @@ Everything here is pure functions over data `summary()` already carries.
   only changed nodes say "measuring", no whole-page dim, and the Fix-it panel
   stops claiming "Nothing to change". The timeline stays un-memoized until a
   Profiler number justifies it. Cards: `.agents/tasks/1.3e-…1.3g-*.md`.
-- **Follow-up, 1.3h (next): verified sizing labels.** `component_sizing`
+- **Follow-up, 1.3h ✅: verified sizing labels.** `component_sizing`
   status still comes from mean utilization (≤ 50% "oversized", ≥ 85%
   "undersized"), which ignores latency tails, pool size and incident
   headroom. The demo worker reads "oversized" at 32% though a cut to 4
@@ -185,7 +183,7 @@ Everything here is pure functions over data `summary()` already carries.
   cut that is free under db_failover is not yet re-checked under the other
   incidents.
 
-### 1.4 Node inspector (pure FE, no BE)
+### 1.4 Node inspector (pure FE, no BE) ✅
 - **Why:** the diagram should answer "which box is the problem?" with one
   click. Data already in `summary()` per component.
 - **FE:** click a node in `TopologyDiagram.tsx` → side panel (or popover):
@@ -194,6 +192,11 @@ Everything here is pure functions over data `summary()` already carries.
   fix-it button (1.3).
 - **Accept:** works light + dark, keyboard accessible (Enter opens, Esc
   closes), `tsc`/`eslint` green.
+- **Scoped (2026-10-10):** per-node failures, retries and p95 contribution
+  are not in `summary()` (run-wide totals only), so 1.4 leaves them out and
+  shows the monthly price (Fix it's `rate × ×N × 720`) instead of the run's.
+  Per-node counters are an engine follow-up. Card:
+  `.agents/tasks/1.4-node-inspector.md`, after 1.3h.
 
 **Wave 1 done =** every run answers: *how bad (worst case), why, and what
 to change* — in the CLI, the API, and the web, identically.

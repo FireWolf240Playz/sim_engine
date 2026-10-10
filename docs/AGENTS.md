@@ -138,7 +138,10 @@ the API validates by exactly the same rules as the CLI.
   `FindingCard` per finding (holds the engine `info` → frontend `ok` severity
   map, `TONE`), `ScoreGauge` (animated score ring), `ScoreTerms` (strip +
   table views of `score_explanation`), `VerdictReportModal` (full report +
-  plain-text copy, including the change log). The verdict's bar, icon, band
+  plain-text copy, including the change log), `NodeInspector` (1.4: the
+  node dialog — its config, the verified measurement at the current size,
+  cost, the findings that name it, and its pending Fix-it change; opens
+  from a topology node's `onOpen`). The verdict's bar, icon, band
   word and gauge share one colour, `format.ts::verdictSeverity` (the worse of
   score and worst finding).
 - `src/core/lib/` — **helpers only, no tests here.** `format.ts` (severity maps
@@ -152,7 +155,9 @@ the API validates by exactly the same rules as the CLI.
   `graphLayout.ts` (pure layered-graph layout), `topologyView.ts`
   (`nodeViews`: the diagram's per-node primitive view model),
   `runResult.ts` (`shareResult`: a new result reuses unchanged parts of the
-  old one, so plain `memo` skips), `verdictView.ts` (`findingKeys`: stable
+  old one, so plain `memo` skips), `nodeInspector.ts` (`inspectNode`: one
+  node's inspection — config, verified label + peaks, monthly cost, findings,
+  pending fix; pure, no React), `verdictView.ts` (`findingKeys`: stable
   id+node keys for the finding cards), `chaos.ts`,
   `useThemeTokens.ts`, `useReducedMotion.ts`, `themeStorage.ts`, `demo.ts`
   (the calibrated demo topology — changing its numbers invalidates the
@@ -183,9 +188,9 @@ read by `test_suggestions.py`: run the web tests first or that test skips.
 **Read a single section, never the whole file.** `ROADMAP.md` is 23 KB.
 
 **Where we are:** Wave 1. 1.1 (multi-seed confidence), 1.2 (findings +
-rich verdict card), 1.3 (verified "Fix it" + change log) and 1.3e–1.3g
-(render streamlining) shipped. Next: 1.3h verified sizing labels (`ROADMAP.md`
-§1.3), then 1.4 node inspector.
+rich verdict card), 1.3 (verified "Fix it" + change log), 1.3e–1.3g
+(render streamlining), 1.3h (verified sizing labels) and 1.4 (node
+inspector) shipped: Wave 1 is done. Next: Wave 2, 2.1 export center.
 Waves 2–6 untouched.
 
 ## `.agents/` — how the agents coordinate

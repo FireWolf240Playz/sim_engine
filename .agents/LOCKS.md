@@ -13,6 +13,7 @@ Format: one row per active claim. `Since` is a date, not a guess.
 | `.agents/tasks/1.3-right-sizing.md`, `1.3b-fix-diff-frontend.md`, `1.3c-review-fixes.md` | claude | 2026-10-08 | 1.3 task cards (qwen appends `## Result` only) |
 | `web/tests/topologyView.test.ts`, `graphLayout.test.ts`, `runResult.test.ts`, `verdictView.test.ts`, `rerun.test.ts` | claude | 2026-10-09 | 1.3e–1.3g acceptance contracts — qwen makes them pass, never edits them |
 | `.agents/tasks/1.3e-topology-memo.md`, `1.3f-simplify-render.md`, `1.3g-rerun-feedback.md` | claude | 2026-10-09 | render task cards (qwen appends `## Result` only) |
+| `web/tests/nodeInspector.test.ts`, `.agents/tasks/1.4-node-inspector.md` | claude | 2026-10-10 | 1.4 contract + card — after 1.3h; qwen makes it pass, appends `## Result` only |
 | `tests/test_verified_sizing.py`, `web/tests/verifiedSizing.test.ts`, `web/tests/sizingTable.test.ts`, `.agents/tasks/1.3h-verified-labels.md` | claude | 2026-10-10 | 1.3h contracts + card — qwen makes them pass, appends `## Result` only |
 
 > **Claude, 2026-10-08:** the `api/` row is superseded. A top-level key
