@@ -1,33 +1,35 @@
-# Handoff — 2026-10-10 1.3h verified sizing labels (card in preparation)
+# Handoff — 2026-10-10 1.3h verified sizing labels
 
 ## Task
-Wait. The 1.3h card and its failing tests are being written; start only when `.agents/tasks/1.3h-*.md` exists and this file points at it.
+Make `tests/test_verified_sizing.py` and `web/tests/verifiedSizing.test.ts` pass: every sizing word and size shows what "Fix it" does.
 
 ## Open these files, in this order
-- `docs/ROADMAP.md` §1.3, "Follow-up, 1.3h" — what the sizing label must become
-- `sim_core/suggestions.py` and `sim_core/rightsize.py` — where the label and the verified fix come from today
+- `.agents/tasks/1.3h-verified-labels.md` — the card: eight numbered steps, prototyped (143 of 143 vitest, pytest green)
+- `sim_core/rightsize.py` — append `verified_sizing`
+- `sim_core/engine.py` `run()` — attach `verified_status` / `verified_capacity` in the `if suggest:` block
+- `web/src/core/lib/format.ts` — `sizingLabel`; then `topologyView.ts`, `SizingTable.tsx`
 
 ## Done
-- 1.3e–1.3g render streamlining shipped: `shareResult`, two plain `memo`s (`TopologyDiagram`, `NodeBody`), `findingKeys`, stale-node marking, no whole-page dim
-- Attempt snapshots are local branches only, never pushed
+- 1.3e–1.3g render streamlining shipped and committed
+- Measured: 9 of 25 demo labels disagree with the verified fix; this card adds no simulation runs
 
 ## Next
-1. Card author: measure the label disagreement on the demo, prototype the fix, write the 1.3h card + failing tests
-2. Executor: take lock rows, follow the card's steps in order, append `## Result`
-3. Still owed from 1.3g: the by-eye checks (MEASURING…, NOT MEASURED, light and dark) on the next dev-server session
+1. Take lock rows for the card's files, then do steps 1–8 in order
+2. Run Verify; append `## Result`; release locks. No browser or Playwright checks: the reviewer does those
+3. Stop for review before 1.4
 
 ## Do not touch
-- Every `web/tests/*.test.ts` and `tests/test_*.py` — locked contracts
-- No new `memo`, no comparators without a measured number on the card
-- git: the executor makes no commits, branches or `git add`
+- `metrics.py`, `score.py`, `findings.py`, `suggestions.py`, `demo.ts` — the old `status` and every score stay (pinned by a test)
+- Every `tests/test_*.py` and `web/tests/*.test.ts` — locked contracts
+- git: no commits, branches or `git add`
 
 ## Constraints discovered
-- `_suggestions` only proposes a size that differs from the current one, so pending == suggestions right after a successful run
-- `tsc` type-checks `web/tests/`; a card's Verify names which errors are allowed
+- The right-sizer searches with the utilisation `status`, so the verified answer goes in new fields, never into `status`
+- `ruff check .` has ~525 old findings: compare the changed files' count (69) before and after
 - PowerShell 5.1: chain with `;`, never `&&`
 
 ## Verify with
 ```
-cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..   # 136/136, no errors
+cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..   # all green, no errors
 & .\venv\Scripts\python.exe -m pytest -q -rs   # green, no skips
 ```

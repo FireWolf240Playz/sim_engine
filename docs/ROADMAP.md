@@ -176,8 +176,11 @@ Everything here is pure functions over data `summary()` already carries.
   breaches the SLA; the db reads "right_sized" while it is the db_failover
   bottleneck. Make the label the verified answer (oversized = a free cut
   exists; undersized = repair or saturation needs a raise), keep utilization
-  as evidence, and move the sizing table, topology colours, the
-  `undersized` finding ("size-to 138" text) and the cost grade onto it.
+  as evidence. Measured: 9 of 25 demo labels (clean + 4 incidents) disagree
+  with the verified fix. Scope: the label only (sizing table, topology,
+  compare, CLI) via new `verified_status` / `verified_capacity` fields; the
+  score, cost grade and `undersized` finding stay on utilization, so every
+  documented score stands. Moving those is a later, separate decision.
 - **Known limit:** a fix is verified under the scenario it was found in; a
   cut that is free under db_failover is not yet re-checked under the other
   incidents.

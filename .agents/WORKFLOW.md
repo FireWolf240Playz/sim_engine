@@ -211,3 +211,6 @@ forgotten.
    that already exists", that is Qwen's, with a Claude-written test.
 4. **Don't let Qwen design.** If there is no exemplar, it is Claude's.
 5. **One lock per path, released when done.** A stale lock is worse than none.
+6. **Qwen runs no browser.** No Playwright, no dev server, no by-eye checks:
+   they make LM Studio lag badly. Qwen's Verify ends at unit tests,
+   typecheck, lint and pytest; Claude does every by-eye check at review.
