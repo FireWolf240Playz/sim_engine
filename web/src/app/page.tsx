@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
@@ -12,11 +12,13 @@ import { StatCards } from "@/core/components/StatCards";
 import { VerdictPanel } from "@/core/components/VerdictPanel";
 import { TimelineChart } from "@/core/components/TimelineChart";
 import { TopologyDiagram } from "@/core/components/TopologyDiagram";
+import { NodeInspector } from "@/core/components/NodeInspector";
 import { api } from "@/core/api/client";
 import { DEMO_META, playbookTargets } from "@/core/lib/demo";
 import { chaosWindows } from "@/core/lib/chaos";
 import { pendingSuggestions } from "@/core/lib/suggestions";
 import { fixPanelView, staleNodes, type FixPanelNote } from "@/core/lib/rerun";
+import { inspectNode } from "@/core/lib/nodeInspector";
 import { CONFIDENCE_SEEDS, useRunState, type RunMode } from "@/core/state/RunStateContext";
 import type { TopologyEdge } from "@/core/types";
 
@@ -111,6 +113,11 @@ export default function HomePage() {
     hasOutcome: Boolean(result?.summary.fix_outcome),
     isPending,
   });
+
+  // 1.4 — which node the inspector has open. `setInspected` is stable, so
+  // passing it to the memo'd diagram never churns its props.
+  const [inspected, setInspected] = useState<string | null>(null);
+  const inspection = inspected && result ? inspectNode(inspected, config, result, stale) : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -255,7 +262,16 @@ export default function HomePage() {
                 targetNames={targetNames}
                 wholePath={wholePath}
                 stale={stale}
+                onOpen={setInspected}
               />
+              {inspection ? (
+                <NodeInspector
+                  inspection={inspection}
+                  onClose={() => setInspected(null)}
+                  onApply={applyAndRerun}
+                  isPending={isPending}
+                />
+              ) : null}
             </Panel>
           </div>
 

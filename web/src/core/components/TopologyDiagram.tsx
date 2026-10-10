@@ -149,6 +149,7 @@ function NodeShell({
   dimmed,
   isActive,
   onActivate,
+  onOpen,
 }: {
   view: NodeViewModel;
   x: number;
@@ -158,19 +159,33 @@ function NodeShell({
   /** This is the pointed-at / focused node (accent stroke emphasis). */
   isActive: boolean;
   onActivate: (name: string | null) => void;
+  /** 1.4: opens the node inspector. Absent → the card is not a button. */
+  onOpen?: (name: string) => void;
 }) {
   return (
     <g
-      role="group"
+      role={onOpen ? "button" : "group"}
       tabIndex={0}
       aria-label={tooltipFor(view)}
+      aria-haspopup={onOpen ? "dialog" : undefined}
       opacity={dimmed ? 0.22 : 1}
-      style={{ transition: "opacity 160ms ease" }}
+      style={{ transition: "opacity 160ms ease", ...(onOpen ? { cursor: "pointer" } : {}) }}
       className="outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       onMouseEnter={() => onActivate(view.name)}
       onMouseLeave={() => onActivate(null)}
       onFocus={() => onActivate(view.name)}
       onBlur={() => onActivate(null)}
+      onClick={onOpen ? () => onOpen(view.name) : undefined}
+      onKeyDown={
+        onOpen
+          ? (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                onOpen(view.name);
+              }
+            }
+          : undefined
+      }
     >
       <NodeBody {...view} x={x} y={y} />
       {isActive ? (
@@ -415,6 +430,7 @@ export const TopologyDiagram = memo(function TopologyDiagram({
   targetNames,
   wholePath,
   stale,
+  onOpen,
 }: TopologyDiagramProps) {
   const [active, setActive] = useState<string | null>(null);
 
@@ -507,6 +523,7 @@ export const TopologyDiagram = memo(function TopologyDiagram({
                 dimmed={active !== null && !focusNodes.has(name)}
                 isActive={active === name}
                 onActivate={setActive}
+                onOpen={onOpen}
               />
             );
           })}
