@@ -1,5 +1,5 @@
 import type { ComponentSizing, TopologyNode } from "../types";
-import { SEVERITY_TEXT, fmtPct, sizingSeverity } from "../lib/format";
+import { SEVERITY_TEXT, fmtPct, sizingLabel, sizingSeverity } from "../lib/format";
 import { SeverityIcon } from "./SeverityIcon";
 
 const STATUS_WORD: Record<string, string> = {
@@ -15,7 +15,7 @@ interface Props {
   stale?: { names: readonly string[]; running: boolean };
 }
 
-/** Per-node right-sizing readout — the numbers behind the cost grade. */
+/** Per-node right-sizing readout: the verified label, utilization as evidence. */
 export function SizingTable({ nodes, sizing, stale }: Props) {
   const staleNames = new Set(stale?.names ?? []);
   return (
@@ -41,7 +41,8 @@ export function SizingTable({ nodes, sizing, stale }: Props) {
                 ? "measuring…"
                 : "not measured"
               : null;
-            const sev = info ? sizingSeverity(info.status) : null;
+            const label = info ? sizingLabel(info) : null;
+            const sev = label ? sizingSeverity(label.status) : null;
             const empty = remeasure ? "—" : "n/a";
             return (
               <tr key={node.name} className="border-b border-line/60 last:border-b-0">
@@ -54,13 +55,13 @@ export function SizingTable({ nodes, sizing, stale }: Props) {
                   {info ? info.p95_queue.toFixed(1) : empty}
                 </td>
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink">
-                  {info ? `×${info.recommended_capacity}` : empty}
+                  {info && label ? `×${label.capacity}` : empty}
                 </td>
                 <td className="py-2.5">
-                  {info && sev ? (
+                  {label && sev ? (
                     <span className={`inline-flex items-center gap-1.5 text-sm ${SEVERITY_TEXT[sev]}`}>
                       <SeverityIcon severity={sev} className="h-3 w-3" />
-                      {STATUS_WORD[info.status] ?? info.status}
+                      {STATUS_WORD[label.status] ?? label.status}
                     </span>
                   ) : (
                     <span className="text-sm text-ink-dim">{remeasure ?? "no data"}</span>

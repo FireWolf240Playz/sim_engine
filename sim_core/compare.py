@@ -150,7 +150,7 @@ def diff_runs(
             else:
                 deltas[key] = float(run_value) - float(base_value)
         sizing = {
-            component: info.get("status")
+            component: info.get("verified_status", info.get("status"))
             for component, info in (result.summary.get("component_sizing") or {}).items()
         }
         runs.append(

@@ -155,13 +155,13 @@ def _format_summary(summary: Dict[str, Any]) -> str:
     sizing = summary.get("component_sizing") or {}
     if sizing:
         lines.append("")
-        lines.append("Right-sizing check (directional, from sampled utilisation)")
+        lines.append("Right-sizing check (verified by simulation)")
         lines.append("-" * 52)
         for name, info in sizing.items():
             lines.append(
-                f"  - {name:<24} {info['status']:<12} "
+                f"  - {name:<24} {info.get('verified_status', info['status']):<12} "
                 f"(avg {info['mean_utilization'] * 100:.0f}% util, "
-                f"size-to {info['recommended_capacity']})"
+                f"size-to {info.get('verified_capacity', info['recommended_capacity'])})"
             )
     lines += _format_findings(summary.get("findings"))
     lines += _format_suggestions(summary)

@@ -238,13 +238,24 @@ class CloudSimulator:
         self.collector.settle_cost(self.config.duration)
         summary = self.collector.summary()
         if suggest:
-            from sim_core.rightsize import plan_fix  # local: rightsize imports this module
+            # local: rightsize imports this module
+            from sim_core.rightsize import plan_fix, verified_sizing
 
             plan = plan_fix(self.config, summary)
             summary["suggestions"] = plan["suggestions"]
             # Before → after of applying every suggestion, from the same
             # verification runs: what "Fix it" will do, and what it can't.
             summary["fix_outcome"] = plan["outcome"]
+            # The sizing label, per node: the verified answer, so the table,
+            # the diagram and the CLI never say something else.
+            labels = verified_sizing(self.config, plan["suggestions"])
+            sizing = summary.get("component_sizing")
+            if isinstance(sizing, dict):
+                for node, (status, capacity) in labels.items():
+                    info = sizing.get(node)
+                    if isinstance(info, dict):
+                        info["verified_status"] = status
+                        info["verified_capacity"] = capacity
         return summary
 
     # -- convenience -------------------------------------------------------

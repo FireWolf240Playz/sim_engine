@@ -9,6 +9,7 @@
  * Pure and dependency-free on purpose: no React, no DOM — Vitest runs it
  * in node.
  */
+import { sizingLabel } from "./format";
 import type {
   ComponentRole,
   ComponentSizing,
@@ -28,6 +29,9 @@ export interface TopologyDiagramProps {
   wholePath: boolean;
   /** 1.3g: nodes whose size moved since the last measured run. */
   stale?: { names: readonly string[]; running: boolean };
+  /** 1.4: click / Enter / Space opens the node inspector. Must be stable —
+   * the diagram is `memo`, so a new function each render would redraw it. */
+  onOpen?: (name: string) => void;
 }
 
 /**
@@ -68,15 +72,17 @@ export function nodeViews(
   const staleNames = new Set(stale.names);
   return nodes.map((n) => {
     const info = sizing[n.name];
+    // 1.3h: the label is the verified answer, utilization stays as evidence.
+    const label = info ? sizingLabel(info) : null;
     return {
       name: n.name,
       role: n.role,
       capacity: n.max_capacity,
-      status: info ? info.status : null,
+      status: label ? label.status : null,
       meanUtil: info ? info.mean_utilization : null,
       p95Util: info ? info.p95_utilization : null,
       p95Queue: info ? info.p95_queue : null,
-      recommended: info ? info.recommended_capacity : null,
+      recommended: label ? label.capacity : null,
       isTarget: targets.has(n.name),
       inPath: wholePath,
       remeasure: staleNames.has(n.name) ? (stale.running ? "running" : "unmeasured") : null,

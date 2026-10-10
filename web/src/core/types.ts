@@ -130,6 +130,10 @@ export interface ComponentSizing {
   p95_utilization: number;
   p95_queue: number;
   recommended_capacity: number;
+  /** Verified answer (1.3h): what "Fix it" will actually do to this node.
+   * Absent on `suggest=False` runs. */
+  verified_status?: SizingStatus;
+  verified_capacity?: number;
 }
 
 export interface CostExtrapolation {

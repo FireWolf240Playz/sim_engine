@@ -1,4 +1,4 @@
-import type { SizingStatus } from "../types";
+import type { ComponentSizing, SizingStatus } from "../types";
 
 export type Severity = "ok" | "warn" | "crit";
 
@@ -41,6 +41,21 @@ export function sizingSeverity(status: SizingStatus): Severity {
   if (status === "right_sized") return "ok";
   if (status === "oversized") return "warn";
   return "crit";
+}
+
+/**
+ * The sizing word and size a node should show: the verified answer
+ * (1.3h) when the summary carries one, else the utilization guess — so the
+ * label can never disagree with what "Fix it" would do.
+ */
+export function sizingLabel(info: ComponentSizing): {
+  status: SizingStatus;
+  capacity: number;
+} {
+  return {
+    status: info.verified_status ?? info.status,
+    capacity: info.verified_capacity ?? info.recommended_capacity,
+  };
 }
 
 export const SEVERITY_TEXT: Record<Severity, string> = {

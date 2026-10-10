@@ -403,3 +403,29 @@ def right_size(
 ) -> list[Suggestion]:
     """Just the suggestion list of :func:`plan_fix`."""
     return plan_fix(config, summary, simulate=simulate)["suggestions"]
+
+
+def verified_sizing(
+    config: SimulationConfig,
+    suggestions: list[Suggestion],
+) -> dict[str, tuple[str, int]]:
+    """Per-node sizing verdict as the verified plan applies it, never a guess.
+
+    For each node (in ``config.topology.nodes`` order) the ``after`` size is
+    the plan's proposal for that node when there is one, else its current
+    ``max_capacity``, and the status names that move — ``oversized`` when the
+    plan cuts, ``undersized`` when it raises, ``right_sized`` when it leaves
+    the node alone. Pure: it reads the plan, it never simulates, so the label
+    on screen can never disagree with what "Fix it" would actually do.
+    """
+    proposed = {s["node"]: s["proposed"] for s in suggestions}
+    out: dict[str, tuple[str, int]] = {}
+    for n in config.topology.nodes:
+        after = proposed.get(n.name, n.max_capacity)
+        status = (
+            "oversized" if after < n.max_capacity
+            else "undersized" if after > n.max_capacity
+            else "right_sized"
+        )
+        out[n.name] = (status, after)
+    return out
