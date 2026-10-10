@@ -278,7 +278,7 @@ export default function HomePage() {
           </Panel>
 
           <Panel title="Sizing" aside="where the money sits">
-            <SizingTable nodes={config.topology.nodes} sizing={sizing} />
+            <SizingTable nodes={config.topology.nodes} sizing={sizing} stale={stale} />
           </Panel>
         </>
       ) : (

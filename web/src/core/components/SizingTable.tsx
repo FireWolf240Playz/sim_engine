@@ -11,10 +11,13 @@ const STATUS_WORD: Record<string, string> = {
 interface Props {
   nodes: TopologyNode[];
   sizing: Record<string, ComponentSizing>;
+  /** 1.3g: nodes whose size moved since the last measured run. */
+  stale?: { names: readonly string[]; running: boolean };
 }
 
 /** Per-node right-sizing readout — the numbers behind the cost grade. */
-export function SizingTable({ nodes, sizing }: Props) {
+export function SizingTable({ nodes, sizing, stale }: Props) {
+  const staleNames = new Set(stale?.names ?? []);
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-left">
@@ -30,20 +33,28 @@ export function SizingTable({ nodes, sizing }: Props) {
         </thead>
         <tbody>
           {nodes.map((node) => {
-            const info = sizing[node.name];
+            // A resized node's numbers belong to its old size: show none of
+            // them as current, same as its topology card (1.3g).
+            const info = staleNames.has(node.name) ? undefined : sizing[node.name];
+            const remeasure = staleNames.has(node.name)
+              ? stale?.running
+                ? "measuring…"
+                : "not measured"
+              : null;
             const sev = info ? sizingSeverity(info.status) : null;
+            const empty = remeasure ? "—" : "n/a";
             return (
               <tr key={node.name} className="border-b border-line/60 last:border-b-0">
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink">{node.name}</td>
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink-dim">×{node.max_capacity}</td>
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink">
-                  {info ? fmtPct(info.mean_utilization, 1) : "n/a"}
+                  {info ? fmtPct(info.mean_utilization, 1) : empty}
                 </td>
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink">
-                  {info ? info.p95_queue.toFixed(1) : "n/a"}
+                  {info ? info.p95_queue.toFixed(1) : empty}
                 </td>
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink">
-                  {info ? `×${info.recommended_capacity}` : "n/a"}
+                  {info ? `×${info.recommended_capacity}` : empty}
                 </td>
                 <td className="py-2.5">
                   {info && sev ? (
@@ -52,7 +63,7 @@ export function SizingTable({ nodes, sizing }: Props) {
                       {STATUS_WORD[info.status] ?? info.status}
                     </span>
                   ) : (
-                    <span className="text-sm text-ink-dim">no data</span>
+                    <span className="text-sm text-ink-dim">{remeasure ?? "no data"}</span>
                   )}
                 </td>
               </tr>

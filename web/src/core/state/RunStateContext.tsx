@@ -171,7 +171,10 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       // A newer run has been started since this one — discard it.
       if (outcome.token !== runSeq.current) return;
       if ("failure" in outcome) {
-        setResult(null);
+        // An apply's re-run keeps the last result: it is the same incident,
+        // and the resized nodes read NOT MEASURED (1.3g). Any other failed
+        // run clears it, since the old numbers may be another incident's.
+        if (!payload.fixStep) setResult(null);
         setError(outcome.failure);
         if (payload.fixStep) setFixHistory((h) => completeRecord(h, null));
         return;
