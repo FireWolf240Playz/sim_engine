@@ -1,19 +1,26 @@
-# Handoff — 2026-10-10 Wave 1 done; no active task
+# Handoff — 2026-11-14 engine review fixes; 2.1 still waits for its card
 
 ## Task
-None. Wait until a 2.1 export-center card exists in `.agents/tasks/` and this file points at it.
+Review and push `fix/request-accounting`; 2.1 export center stays blocked until its card exists in `.agents/tasks/`.
 
 ## Open these files, in this order
-- `docs/ROADMAP.md` §2.1 — the export center (CSV, Excel, JSON; first new engine dependency `openpyxl`)
+- `tests/test_accounting.py` — the accounting rules the engine now keeps
+- `tests/test_live_state.py` — capacity restore and per-cache decisions
+- `web/src/core/lib/demo.ts` — re-measured demo scores; db_failover is now a mild incident
 
 ## Done
-- 1.3h verified sizing labels: `verified_status` / `verified_capacity`, `sizingLabel`; scores unchanged
-- 1.4 node inspector: `inspectNode` + `NodeInspector`; click / Enter / Space opens, Esc closes
-- Both checked in Chrome, light + dark
+- Requests overdue at the horizon are recorded as failed; `unfinished_requests`, `overdue_requests` in `summary()` (`metrics.py`, `engine.py`)
+- A failed request never meets the SLA (`engine.py`)
+- Capacity restore serves the waiting queue (`topology.py`)
+- Each cache decides from its own hit rate; `cache_outage` honours `target` (`engine.py`, `chaos.py`, `config.py`)
+- Pricing errors mask the API key (`price_source/base.py`)
+- Fix it settles to a fixed point, one run per distinct sizing (`rightsize.py`)
 
 ## Next
-1. Card author: measure and prototype 2.1, then write its card + failing tests
-2. Executor: take lock rows, follow the card's steps in order, append `## Result`
+1. Decide whether to recalibrate the demo: db_failover now moves the score 97 → 94 only
+2. Cost grade from `verified_status`, not the utilisation guess (`score.py`, `engine.py`)
+3. Preset `cost_per_hour` is per instance but billed per slot (`presets.py`, `metrics.py`)
+4. Card author: measure and prototype 2.1, then write its card + failing tests
 
 ## Do not touch
 - Every `tests/test_*.py` and `web/tests/*.test.ts` — locked contracts
@@ -21,12 +28,14 @@ None. Wait until a 2.1 export-center card exists in `.agents/tasks/` and this fi
 - git: the executor makes no commits, branches or `git add`
 
 ## Constraints discovered
-- Per-node failures, retries and p95 contribution are not in `summary()`; an engine follow-up
+- Demo scores (seed 42): clean 97, db_failover 94, latency spike 86, cache storm 59, dependency cascade 57
+- Every cache visit draws from the RNG now, so multi-cache topologies changed stream order
+- SimPy `Resource._do_put` returns `None`: one `_trigger_put` admits at most one request
 - PowerShell 5.1 drops pytest's final "N passed" line through a pipe: judge by exit code and the dots
 - `web/tests/fixtures/suggestions_applied.yaml` is written by vitest and read by pytest: run web tests first
 
 ## Verify with
 ```
 cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..   # 160/160, no errors
-& .\venv\Scripts\python.exe -m pytest -q -rs   # green, no skips
+& .\venv\Scripts\python.exe -m pytest -q -rs   # exit 0, no skips
 ```

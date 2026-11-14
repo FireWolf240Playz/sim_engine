@@ -76,15 +76,15 @@ this repo.
 | File | KB | What it is / open it when |
 |---|---|---|
 | `config.py` | 22 | **All Pydantic models.** `SimulationConfig`, `GraphTopologyConfig`, `Edge`, `TrafficPattern`, `ChaosEvent`, `ComponentRole`. Open for: adding a config field, a validation rule. Grep the class name; never read whole. Note `TopologyConfig` is the legacy 4-node shape kept for compatibility — `.to_graph()` converts it to `GraphTopologyConfig`, which is what the engine actually runs. |
-| `topology.py` | 11 | **Live SimPy wrappers.** `Component` (owns the `simpy.Resource`, `apply_capacity_drop`, `apply_latency_spike`, `apply_hit_rate_drop`, `draw_service_time`) and `Topology` (the graph: `component()`, `outgoing_edges()`, `cache()`). Open for: anything about live capacity or service time. |
+| `topology.py` | 11 | **Live SimPy wrappers.** `Component` (owns the `simpy.Resource`, `apply_capacity_drop`, `apply_latency_spike`, `apply_hit_rate_drop`, `draw_service_time`) and `Topology` (the graph: `component()`, `outgoing_edges()`, `cache()`). `set_capacity` hands freed slots to the waiting queue itself: SimPy only re-checks a queue on an arrival or a release. Open for: anything about live capacity or service time. |
 | `engine.py` | 11 | **`CloudSimulator`** — owns `simpy.Environment`, `serve_request()`, `_walk()` (the DAG traversal, cache hit/miss, fan-out probabilities), `_use_component()` (acquire/timeout/retry/release). `run(suggest=True)` attaches `summary["suggestions"]` and `summary["fix_outcome"]` from `rightsize.plan_fix` after `summary()` (it has the node configs; `MetricsCollector.summary()` alone carries neither key). Verification re-runs use `suggest=False`. Open for: how a request moves through the graph. |
 | `traffic.py` | 3 | Poisson arrivals following the configured profile. Small, read it whole. |
-| `chaos.py` | 4 | The three injectors: `component_failure`, `network_latency`, `cache_outage`. Small, read it whole. |
-| `metrics.py` | 16 | `RequestRecord`, `UtilizationSample`, `MetricsCollector`. **`summary()` and `timeseries()` are the contract above.** Open for: adding a metric. |
+| `chaos.py` | 4 | The three injectors: `component_failure`, `network_latency`, `cache_outage` (hits the cache its `target` names, else the first). Small, read it whole. |
+| `metrics.py` | 16 | `RequestRecord`, `UtilizationSample`, `MetricsCollector`. **`summary()` and `timeseries()` are the contract above.** Every arrival is accounted for: `record_arrival` + `settle_unfinished` record a request still in the system at the horizon and already past the SLA budget as failed (`unfinished_requests`, `overdue_requests`), and a failed request never counts as SLA-met. Open for: adding a metric. |
 | `score.py` | 18 | Pure functions on `summary()`: `resilience_score`, `cost_grade`, `cost_extrapolation`, `cost_per_completed_request`, `score_headline`, `score_color`, `score_band`, `capped_band` (a crit finding caps the band at "At risk", a warn at "Solid"), `score_explanation` (carries `band_capped_by`). |
 | `findings.py` | 21 | Pure functions on `summary()`: `build_findings` → the plain-English "why this score" verdict, `verdict_headline`. Each `Finding` has `id`, `severity`, `text`, `node?` plus optional `title`, `why`, `impact`, `evidence` (`[{label, value}]`), `recommendation`. Each rule is its own `_`-prefixed function with a threshold constant at module top. **Add a finding = add one function + register it.** |
 | `suggestions.py` | 7 | Pure flagging formula: `build_suggestions(nodes, summary)` → `Suggestion` list (`node`, `param`, `current`, `proposed`, `reason`, `est_monthly_delta`). Says *which* nodes look off by mean utilization; it no longer sets the sizes the summary carries. |
-| `rightsize.py` | 14 | **Verified "Fix it".** `plan_fix(config, summary)` → `{suggestions, outcome}`: repair (raise whichever node removes the most crit/warn findings), clear undersized flags, then trim (smallest size that adds no finding, ≤ 0.5 score points total), all proven by re-simulating on the pinned seed. `FixOutcome` = score/band before → after, `resolved`, `unfixed`. Contract: `tests/test_suggestions.py` (locked). |
+| `rightsize.py` | 14 | **Verified "Fix it".** `plan_fix(config, summary)` → `{suggestions, outcome}`: repair (raise whichever node removes the most crit/warn findings), clear undersized flags, then trim (smallest size that adds no finding, ≤ 0.5 score points below the settled score, repeated until a re-run of the result would offer nothing), all proven by re-simulating on the pinned seed, one run per distinct sizing. `FixOutcome` = score/band before → after, `resolved`, `unfixed`. Contract: `tests/test_suggestions.py` (locked). |
 | `profile.py` | 7 | Multi-seed confidence: `resilience_profile` (worst/typical/best), `typical_index`, `timeseries_band` (per-tick P95 min/max across seeds). |
 | `playbooks.py` | 7 | The four named incidents: `db_failover`, `cross_region_latency_spike`, `cache_eviction_storm`, `dependency_timeout_cascade`. Each is a function returning `ChaosEvent`s, targeted **by role**. Open for: adding an incident. |
 | `presets.py` | 11 | AWS/Azure/GCP small-tier component presets. Flat list of factory functions. |
@@ -173,9 +173,12 @@ the API validates by exactly the same rules as the CLI.
   `npm run test:unit`.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
 
-## `tests/` — pytest, 14 files, ~220 tests
+## `tests/` — pytest, 18 files, ~270 tests
 
 Mirrors `sim_core/`: `test_engine.py`, `test_score.py`, `test_findings.py`, …
+`test_accounting.py` (every arrival counted, failures never SLA-met),
+`test_live_state.py` (capacity restore, per-cache decisions) and
+`test_pricing_errors.py` (no credential in an error) pin the engine-review fixes.
 `test_api.py` covers the FastAPI layer with `TestClient`. `test_cli.py` pins
 CLI user-error paths (exit codes + stderr), which no simulation exercises.
 `tests/fixtures/suggestions_applied.yaml` is written by the Vitest suite and
