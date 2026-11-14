@@ -10,7 +10,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from sim_core import (
     AppWorkerConfig,
@@ -29,11 +29,14 @@ from sim_core import (
     score_headline,
     typical_index,
 )
+from sim_core.exports import EXPORT_FORMATS, render_export
 from sim_core.playbooks import get_playbook, list_playbooks
 from sim_core.viz import render_comparison
 
 DEFAULT_REPORT = "eleven_report.png"
 DEFAULT_JSON = "summary.json"
+#: ``--export`` writes ``<base>.<ext>``; this is the base when none is given.
+DEFAULT_EXPORT_BASE = "eleven_export"
 
 
 def default_config() -> SimulationConfig:
@@ -258,12 +261,58 @@ def load_config(path: str) -> SimulationConfig:
     return SimulationConfig.from_yaml(path)
 
 
+def write_exports(
+    simulator: CloudSimulator,
+    summary: Dict[str, Any],
+    formats: Sequence[str],
+    base: str,
+    *,
+    label: str = "Export",
+) -> List[Path]:
+    """Write a finished run to ``<base>.<ext>``, one file per format.
+
+    Takes the simulator that already ran and the summary it returned, so the
+    files describe the run that was printed: nothing is simulated again, and
+    the exported seed is the one the simulator used even when the config
+    named none.
+
+    The files are written as bytes. The CSV carries its own ``\\r\\n`` line
+    ends, and a text-mode handle on Windows would turn each into ``\\r\\r\\n``,
+    which a spreadsheet shows as a blank row after every request.
+
+    ``label`` starts the line printed per file. Returns the written paths, in
+    the order the formats were asked for (a format named twice is written once).
+    """
+    config = simulator.config.model_dump(mode="json")
+    request_log = simulator.collector.request_log()
+    written: List[Path] = []
+    for name in dict.fromkeys(formats):
+        path = Path(f"{base}.{EXPORT_FORMATS[name].extension}")
+        content = render_export(
+            name,
+            summary=summary,
+            config=config,
+            request_log=request_log,
+            seed=simulator.seed,
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        print(f"{label} written to: {path}")
+        written.append(path)
+    return written
+
+
 def run_simulation(
     config: SimulationConfig,
     report_path: str,
     json_path: str,
+    export_formats: Optional[Sequence[str]] = None,
+    export_base: str = DEFAULT_EXPORT_BASE,
 ) -> Dict[str, Any]:
     """Run the simulation for ``config`` and write the PNG + JSON outputs.
+
+    ``export_formats`` (``--export``) also writes the run to
+    ``<export_base>.<ext>`` in each named format, from this same run.
 
     Returns the summary dict (also written to ``json_path``).
     """
@@ -278,6 +327,9 @@ def run_simulation(
         json.dump(summary, fh, indent=2)
         fh.write("\n")
     print(f"Summary JSON written to: {json_path}")
+
+    if export_formats:
+        write_exports(simulator, summary, export_formats, export_base)
     return summary
 
 
@@ -332,6 +384,8 @@ def run_multi_seed(
     n_seeds: int,
     report_path: str,
     json_path: str,
+    export_formats: Optional[Sequence[str]] = None,
+    export_base: str = DEFAULT_EXPORT_BASE,
 ) -> Dict[str, Any]:
     """Run ``config`` once per seed and report the confidence profile.
 
@@ -339,6 +393,10 @@ def run_multi_seed(
     no seed). Prints the worst/typical/best table, renders the report PNG
     of the *typical* run (middle by resilience score), and writes
     ``{seeds, profile, runs}`` JSON to ``json_path``.
+
+    ``export_formats`` (``--export``) writes that same typical run to
+    ``<export_base>.<ext>``: an export is one run, and the typical one is
+    the run the report and the verdict already describe.
     """
     if n_seeds < 1:
         raise ValueError("--seeds must be >= 1")
@@ -376,6 +434,15 @@ def run_multi_seed(
         json.dump(payload, fh, indent=2)
         fh.write("\n")
     print(f"Profile JSON written to: {json_path}")
+
+    if export_formats:
+        write_exports(
+            simulators[typical],
+            summaries[typical],
+            export_formats,
+            export_base,
+            label=f"Export (typical run, seed {seeds[typical]})",
+        )
     return payload
 
 
@@ -531,11 +598,46 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_export_arguments(parser: argparse.ArgumentParser, *, multi_seed: bool) -> None:
+    """Add ``--export`` / ``--export-base`` to a command that runs a simulation.
+
+    One definition for ``run`` and ``demo``, so the two cannot offer different
+    formats. The choices are the registry's names: a format added there is
+    accepted here without another edit. ``multi_seed`` only words the help:
+    a command with ``--seeds`` says which of its runs is exported.
+    """
+    export_help = (
+        "Also write the run as a file in each named format "
+        f"({', '.join(EXPORT_FORMATS)}), e.g. --export csv xlsx."
+    )
+    if multi_seed:
+        export_help += " With --seeds N the typical run is exported."
+    parser.add_argument(
+        "--export",
+        nargs="+",
+        choices=list(EXPORT_FORMATS),
+        default=None,
+        metavar="FORMAT",
+        help=export_help,
+    )
+    names = ", ".join(f"PATH.{fmt.extension}" for fmt in EXPORT_FORMATS.values())
+    parser.add_argument(
+        "--export-base",
+        default=DEFAULT_EXPORT_BASE,
+        metavar="PATH",
+        help=(
+            "Path of the exported files without the extension: the files are "
+            f"{names} (default: {DEFAULT_EXPORT_BASE})."
+        ),
+    )
+
+
 def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
     """Add the ``run`` / ``demo`` / ``playbooks`` / ``compare`` subcommands.
 
     ``run`` and ``demo`` accept ``--playbook NAME`` to layer a built-in
-    incident (see :mod:`sim_core.playbooks`) on top of the configured chaos.
+    incident (see :mod:`sim_core.playbooks`) on top of the configured chaos,
+    and ``--export FORMAT ...`` to write the run out as files.
     """
     run_p = subparsers.add_parser(
         "run",
@@ -576,6 +678,7 @@ def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
             "profile instead of one run (default: 1)."
         ),
     )
+    _add_export_arguments(run_p, multi_seed=True)
 
     demo_p = subparsers.add_parser(
         "demo",
@@ -590,6 +693,7 @@ def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
             "(see `eleven playbooks list`), e.g. db_failover."
         ),
     )
+    _add_export_arguments(demo_p, multi_seed=False)
 
     playbooks_p = subparsers.add_parser(
         "playbooks",

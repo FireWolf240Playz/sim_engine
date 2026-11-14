@@ -8,12 +8,13 @@ validated by the exact same rules the CLI and the library use.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
 from api.limits import MAX_SWEEP_VALUES, MAX_WHAT_IF_VARIANTS
 from sim_core import SimulationConfig
+from sim_core.exports import EXPORT_FORMATS
 
 
 class SimulateRequest(BaseModel):
@@ -134,6 +135,51 @@ class PlaybookInfo(BaseModel):
 
 class PlaybookListResponse(BaseModel):
     playbooks: list[PlaybookInfo]
+    count: int
+
+
+#: The names of :data:`sim_core.exports.EXPORT_FORMATS`, spelled out because a
+#: ``Literal`` cannot be computed; the check below keeps the two from drifting.
+ExportFormatName = Literal["csv", "json", "xlsx"]
+
+if get_args(ExportFormatName) != tuple(EXPORT_FORMATS):
+    raise RuntimeError(
+        "api.schemas.ExportFormatName is out of step with sim_core.exports.EXPORT_FORMATS: "
+        f"{get_args(ExportFormatName)} != {tuple(EXPORT_FORMATS)}"
+    )
+
+
+class ExportRequest(BaseModel):
+    """One run, asked for as a file.
+
+    The API keeps no run, so the run is named by what produced it: ``config``
+    (which must carry its ``seed``) and the optional ``playbook``. The server
+    simulates it again and, the engine being deterministic, returns the run
+    the caller already saw.
+
+    An unknown ``format`` is refused by validation, and the 422 lists the
+    formats that exist. When runs are stored (roadmap 3.1) a ``run_id`` field
+    joins ``config`` here as the other way to name a run.
+    """
+
+    config: SimulationConfig
+    format: ExportFormatName
+    playbook: str | None = None
+
+
+class ExportFormatInfo(BaseModel):
+    """What a client needs to offer one format and to name its file."""
+
+    name: str
+    label: str
+    extension: str
+    media_type: str
+    #: ``"free"`` or ``"paid"``. Reported so a UI can show it; not enforced.
+    tier: str
+
+
+class ExportFormatsResponse(BaseModel):
+    formats: list[ExportFormatInfo]
     count: int
 
 

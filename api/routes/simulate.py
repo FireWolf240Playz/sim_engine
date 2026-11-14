@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException
 
 from api.limits import check_budget
 from api.schemas import SimulateRequest, SimulateResponse
-from sim_core import CloudSimulator, resilience_profile, typical_index
+from sim_core import CloudSimulator, SimulationConfig, resilience_profile, typical_index
 from sim_core.playbooks import get_playbook
 from sim_core.profile import timeseries_band
 
@@ -47,22 +47,7 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
     - ``n_seeds > 1`` (or explicit ``seeds``) → one run per seed plus the
       worst/typical/best profile; ``summary`` is the typical run's.
     """
-    config = payload.config
-    if payload.playbook is not None:
-        try:
-            playbook = get_playbook(payload.playbook)
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(
-                status_code=404,
-                detail=f"unknown playbook: {payload.playbook!r}",
-            ) from exc
-        try:
-            config = playbook.apply(config)
-        except (KeyError, ValueError) as exc:
-            raise HTTPException(
-                status_code=400,
-                detail=f"playbook {payload.playbook!r} cannot apply to this topology: {exc}",
-            ) from exc
+    config = apply_playbook_or_404(payload.config, payload.playbook)
 
     seed_list = _resolve_seed_list(payload, config.seed)
     check_budget(config, runs=len(seed_list) if seed_list is not None else 1)
@@ -98,6 +83,32 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
         response["timeseries"] = series[typical]
         response["timeseries_band"] = timeseries_band(series)
     return response
+
+
+def apply_playbook_or_404(config: SimulationConfig, name: Optional[str]) -> SimulationConfig:
+    """``config`` with the named incident's chaos events appended.
+
+    Shared by every route that takes a ``playbook``, so the same name is
+    refused with the same status and the same words wherever it is sent:
+    an unknown name is a 404, a known incident this topology has no node
+    for is a 400. ``None`` means no incident and returns ``config`` as is.
+    """
+    if name is None:
+        return config
+    try:
+        playbook = get_playbook(name)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown playbook: {name!r}",
+        ) from exc
+    try:
+        return playbook.apply(config)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"playbook {name!r} cannot apply to this topology: {exc}",
+        ) from exc
 
 
 def _resolve_seed_list(

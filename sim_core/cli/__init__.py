@@ -98,14 +98,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     n_seeds = getattr(args, "seeds", 1) or 1
     if n_seeds > 1:
         try:
-            sim.run_multi_seed(config, n_seeds, report_path, json_path)
+            sim.run_multi_seed(
+                config, n_seeds, report_path, json_path, args.export, args.export_base
+            )
         except Exception as exc:
             print(f"error: simulation failed: {exc}", file=sys.stderr)
             return 1
         return 0
 
     try:
-        sim.run_simulation(config, report_path, json_path)
+        sim.run_simulation(config, report_path, json_path, args.export, args.export_base)
     except Exception as exc:
         print(f"error: simulation failed: {exc}", file=sys.stderr)
         return 1

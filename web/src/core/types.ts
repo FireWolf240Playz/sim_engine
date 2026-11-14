@@ -414,3 +414,41 @@ export interface PresetListResponse {
   presets: Record<string, Preset>;
   count: number;
 }
+
+/** A downloadable format of one run (`sim_core/exports.py::EXPORT_FORMATS`). */
+export type ExportFormatName = "csv" | "json" | "xlsx";
+
+/** Which plan a format belongs to. A label today; the API enforces it with auth (roadmap 2.2). */
+export type ExportTier = "free" | "paid";
+
+/** One entry of `GET /export/formats`. */
+export interface ExportFormatInfo {
+  name: ExportFormatName;
+  label: string;
+  extension: string;
+  media_type: string;
+  tier: ExportTier;
+}
+
+export interface ExportFormatsResponse {
+  formats: ExportFormatInfo[];
+  count: number;
+}
+
+/**
+ * The run a result was measured from. The API keeps no run, so an export
+ * names it by what produced it and the server simulates it again; this is
+ * the config and playbook *of the result on screen*, not whatever the
+ * controls were changed to afterwards.
+ */
+export interface MeasuredRun {
+  config: SimulationConfig;
+  playbook: string | null;
+}
+
+/** Body of `POST /export` (see `api/schemas.py::ExportRequest`). */
+export interface ExportRequest {
+  config: SimulationConfig;
+  playbook: string | null;
+  format: ExportFormatName;
+}

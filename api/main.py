@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import sim_core
-from api.routes import compare, imports_api, playbooks, presets, simulate
+from api.routes import compare, export, imports_api, playbooks, presets, simulate
 from api.schemas import HealthResponse
 
 #: Environment variable naming the browser origins allowed to call the API,
@@ -62,10 +62,14 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_methods=["*"],
         allow_headers=["*"],
+        # A page on another origin cannot read a response header unless it is
+        # exposed, and the download's file name travels in this one.
+        expose_headers=["Content-Disposition"],
         **_cors_origins(),
     )
 
     app.include_router(simulate.router)
+    app.include_router(export.router)
     app.include_router(compare.router)
     app.include_router(imports_api.router)
     app.include_router(playbooks.router)

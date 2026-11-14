@@ -26,6 +26,8 @@ node_modules/
 # tracked.
 /*.json
 /*.png
+/*.csv
+/*.xlsx
 
 # NOTE: docs/ is intentionally TRACKED. It holds docs/AGENTS.md (the repo map
 # every agent reads first), docs/HANDOFF.md, ROADMAP.md, PLAN.md and
