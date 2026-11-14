@@ -195,11 +195,16 @@ the API validates by exactly the same rules as the CLI.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
 - The simulator page (`src/app/page.tsx`) is a dashboard: a sticky toolbar
   (run mode, Export, Run), the incident bar, the tile strip, the topology at
-  full width, then two columns that flow independently (left: verdict,
-  confidence; right: Fix it, changes applied, timeline, sizing). Below `xl`
-  the columns stack. `Shell` keeps the sidebar in view and caps the canvas
-  at 1600px. The topology never shrinks below its natural size and grows to
-  at most 1.3× of it.
+  full width, then **rows, not independent columns**, so cards side by side
+  share a height and no hole opens between them: verdict | Fix it (+ changes
+  applied), then the timeline (beside confidence in 5-seed mode), then
+  sizing. Only cards of similar height are paired; the last card in a cell
+  takes `flex-1` (`Panel`'s `className`). Findings are one-line rows that
+  expand (`FindingCard`'s `onToggle`; the report modal and node inspector
+  pass none, so they always show the full card), and the change log shows
+  the latest two (`FixHistoryList`'s `limit`). Below `xl` everything stacks.
+  `Shell` keeps the sidebar in view and caps the canvas at 1600px. The
+  topology never shrinks below its natural size and grows to at most 1.3×.
 
 ## `tests/` — pytest, 29 files, ~425 tests
 
