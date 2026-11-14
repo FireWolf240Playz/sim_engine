@@ -13,8 +13,9 @@ product/company picture, read [FOUNDER_GUIDE.md](FOUNDER_GUIDE.md).
 > **Where we are (2026-10-10):** Wave 1. 1.1 ✅ · 1.2 ✅ · 1.3 ✅ (verified
 > repair-and-trim "Fix it", before → after preview, change log in the page
 > and report; 1.3e–1.3g render streamlining ✅; 1.3h verified sizing
-> labels ✅) · 1.4 node inspector ✅ · **Wave 1 done.** Waves 2–6 not started.
-> Next up: **Wave 2, 2.1 export center**.
+> labels ✅) · 1.4 node inspector ✅ · **Wave 1 done.**
+> **2026-11-14:** 2.1 export center ✅. 2.2 tier gating waits for Wave 4's
+> auth. Next up: **Wave 3, 3.1**.
 
 ## 0. Current state (verified, as of 2026-10-04)
 
@@ -207,7 +208,7 @@ to change* — in the CLI, the API, and the web, identically.
 
 Goal: "the data is the gold" — export is the paid hook.
 
-### 2.1 Export center (LOCKED)
+### 2.1 Export center (LOCKED) — ✅ shipped (2026-11-14: `sim_core/exports.py`, `POST /export`, `--export`, Export in the page toolbar)
 - **BE shape:**
   - CSV: per-request log (`t, path, latency_ms, sla_ok, retries, failed`)
     — the raw data power users want.

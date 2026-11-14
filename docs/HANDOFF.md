@@ -1,39 +1,40 @@
-# Handoff — 2026-11-14 2.1 export center built; browser check and merge are left
+# Handoff — 2026-11-14 dashboard layout built on `feat/dashboard-layout`; owner review is left
 
 ## Task
-Check the Export panel in the browser, then merge `feat/2.1-export-center` and mark roadmap 2.1 done.
+Get the owner's verdict on the dashboard layout, apply what they ask for, then merge the branch.
 
 ## Open these files, in this order
-- `web/src/core/components/ExportMenu.tsx` — the panel to look at
-- `web/src/app/page.tsx` — where it is mounted, after "Fix it"
-- `.agents/tasks/2.1c-export-menu.md` — the card and its `## Result`
-- `docs/ROADMAP.md` §2.1 — to mark done; §2.2 is the next card
+- `web/src/app/page.tsx` — the layout: toolbar, incident bar, tiles, topology, two columns
+- `web/src/core/components/StatCards.tsx` — the six-tile strip
+- `web/src/core/components/ExportMenu.tsx` — Export as a toolbar dropdown
+- `web/src/components/Shell.tsx` — sticky sidebar, 1600px canvas
 
 ## Done
-- Per-request log, three formats, one registry (`sim_core/metrics.py`, `sim_core/exports.py`)
-- `GET /export/formats`, `POST /export`, `--export` on `run` and `demo` (`api/routes/export.py`, `sim_core/cli/sim.py`)
-- Export request and file-name helpers (`web/src/core/lib/exports.ts`)
-- `api.exportFormats`, `api.exportRun`, blob download path (`web/src/core/api/client.ts`)
-- `measuredRun` on the run state (`web/src/core/state/RunStateContext.tsx`)
-- Export panel (`web/src/core/components/ExportMenu.tsx`, `web/src/app/page.tsx`)
+- 2.1 export center shipped and marked done (`docs/ROADMAP.md`)
+- Simulator page as a dashboard: sticky toolbar, two independent columns (`web/src/app/page.tsx`)
+- Six tiles: SLA compliance, P95 latency and failed requests added (`StatCards.tsx`)
+- Export moved from its own panel into the toolbar (`ExportMenu.tsx`)
+- Sticky sidebar, wider canvas (`Shell.tsx`); incident description beside its control (`IncidentPicker.tsx`)
+- Topology capped at 1.3× its natural size and centred (`TopologyDiagram.tsx`)
+- Chaos-window labels on alternate rows (`TimelineChart.tsx`); `shadow-pop` token (`globals.css`)
 
 ## Next
-1. Reviewer: in the browser, download each format after a single run and after a 5-seed run; light + dark
-2. Reviewer: change the incident picker without running, export, and confirm the file is the run on screen
-3. Owner: commit 2.1c, merge to `main`, push
-4. Card author: mark 2.1 done in `docs/ROADMAP.md`; measure and write the 2.2 card (paid gating, 402)
+1. Owner: look at `/` at your own screen size, light and dark, and say what to change
+2. Owner: commit and merge `feat/dashboard-layout`
+3. Card author: collapse finding cards to rows that expand (the verdict column is the tallest thing on the page)
+4. Card author: measure and prototype Wave 3 (replay from `timeseries` first, streaming after)
 
 ## Do not touch
 - Every `tests/test_*.py` and `web/tests/*.test.ts` — locked contracts
-- No browser, Playwright or dev server for the executor: checks by eye happen at review
+- `web/src/core/lib/demo.ts` — calibrated demo numbers
 - git: the executor makes no commits, branches or `git add`
 
 ## Constraints discovered
-- The API keeps no run: an export re-simulates, so the request carries the measured config, its playbook and, in 5-seed mode, `typical_seed`
-- A playbook starts 5 s in at the earliest: a 6 s fixture reads the same with or without one
-- Excel and JSON exports include the Fix-it plan: 5–13 s on the 19-node examples
-- The `paid` tier is a badge only until 2.2: nothing refuses a format
-- PowerShell 5.1 drops pytest's final "N passed" line through a pipe: judge by exit code and the dots
+- The topology needs 832px for the demo graph: beside another panel it scrolls sideways, so it keeps a full row
+- A full-page headless screenshot can leave the Recharts chart blank; a viewport capture scrolled to it shows it drawn
+- The Fix-it table needs about 530px: below that its Apply buttons scroll out of view (phones)
+- `.eleven-results` dims its direct children during a run; the topology wrapper is `.eleven-live` and must stay a direct child
+- Tile colours come from findings (`sla_breach`, `p95_headroom`): do not add thresholds in the frontend
 
 ## Verify with
 ```

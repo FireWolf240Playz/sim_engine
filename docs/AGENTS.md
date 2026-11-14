@@ -141,7 +141,11 @@ the API validates by exactly the same rules as the CLI.
   a hex in a component. SVG uses the `fill-*`/`stroke-*` utilities; Recharts
   (which needs real strings) reads the same vars via `core/lib/useThemeTokens`.
 - `src/core/components/` — `TopologyDiagram` (SVG graph), `TimelineChart`
-  (Recharts), `StatCards`, `SizingTable`, `ConfidencePanel`, `SeverityIcon`,
+  (Recharts), `StatCards` (the six-tile strip: resilience, SLA compliance,
+  P95, failed requests, cost grade, projected bill; the SLA and P95 tiles
+  take their colour from the engine's `sla_breach` / `p95_headroom`
+  findings, never from a threshold of their own), `SizingTable`,
+  `ConfidencePanel`, `SeverityIcon`,
   `Modal` (generic dialog), `FixDiffPanel` (1.3: before→after table, monthly
   Δ, Copy YAML / Terraform, per-row and all-at-once Apply & re-run), `FixLog`
   (`FixOutcomePreview`: the verified before → after; `FixHistoryList`: every
@@ -152,9 +156,9 @@ the API validates by exactly the same rules as the CLI.
   plain-text copy, including the change log), `NodeInspector` (1.4: the
   node dialog — its config, the verified measurement at the current size,
   cost, the findings that name it, and its pending Fix-it change; opens
-  from a topology node's `onOpen`), `ExportMenu` (2.1c: one button per
-  export format, downloads the run on screen; a paid format wears a "Pro"
-  badge and is not locked). The verdict's bar, icon, band
+  from a topology node's `onOpen`), `ExportMenu` (2.1c: the Export
+  button in the page toolbar; it opens the list of formats and downloads
+  the run on screen; a paid format wears a "Pro" badge and is not locked). The verdict's bar, icon, band
   word and gauge share one colour, `format.ts::verdictSeverity` (the worse of
   score and worst finding).
 - `src/core/lib/` — **helpers only, no tests here.** `format.ts` (severity maps
@@ -189,6 +193,13 @@ the API validates by exactly the same rules as the CLI.
 - `tests/` — Vitest unit tests (17 files, 179 tests), one file per module,
   `npm run test:unit`.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
+- The simulator page (`src/app/page.tsx`) is a dashboard: a sticky toolbar
+  (run mode, Export, Run), the incident bar, the tile strip, the topology at
+  full width, then two columns that flow independently (left: verdict,
+  confidence; right: Fix it, changes applied, timeline, sizing). Below `xl`
+  the columns stack. `Shell` keeps the sidebar in view and caps the canvas
+  at 1600px. The topology never shrinks below its natural size and grows to
+  at most 1.3× of it.
 
 ## `tests/` — pytest, 29 files, ~425 tests
 
@@ -216,9 +227,9 @@ read by `test_suggestions.py`: run the web tests first or that test skips.
 **Where we are:** Wave 1. 1.1 (multi-seed confidence), 1.2 (findings +
 rich verdict card), 1.3 (verified "Fix it" + change log), 1.3e–1.3g
 (render streamlining), 1.3h (verified sizing labels) and 1.4 (node
-inspector) shipped: Wave 1 is done. Wave 2: 2.1 export center is built
-(engine 2.1, API + CLI 2.1b, web menu 2.1c); the menu still needs its
-check in the browser. Next: 2.2 paid gating. Waves 3–6 untouched.
+inspector) shipped: Wave 1 is done. Wave 2: 2.1 export center shipped
+(engine 2.1, API + CLI 2.1b, web menu 2.1c). 2.2 paid gating lands with
+Wave 4's auth, so Wave 3 (liveness) is next. Waves 3–6 untouched.
 
 ## `.agents/` — how the agents coordinate
 
