@@ -15,7 +15,13 @@ import { DEMO_CONFIG } from "../lib/demo";
 import { completeRecord, startRecord, type FixRecord } from "../lib/fixHistory";
 import { applySuggestions } from "../lib/suggestions";
 import { shareResult } from "../lib/runResult";
-import type { SimulateResponse, SimulationConfig, Suggestion, TopologyNode } from "../types";
+import type {
+  MeasuredRun,
+  SimulateResponse,
+  SimulationConfig,
+  Suggestion,
+  TopologyNode,
+} from "../types";
 
 /**
  * How the next run executes (roadmap 1.1):
@@ -76,6 +82,13 @@ interface RunStateValue {
    * belong to the old size.
    */
   measuredNodes: TopologyNode[] | null;
+  /**
+   * 2.1c — the config and incident the current `result` was simulated with
+   * (null when there is no measured run). An export names its run by these,
+   * never by `config` / `playbook`: the picker and "Apply & re-run" move
+   * those before anything new is measured.
+   */
+  measuredRun: MeasuredRun | null;
   error: string | null;
   isPending: boolean;
 }
@@ -105,7 +118,7 @@ const DEMO_LABEL = "demo topology";
  * `onSettled` covers both paths.
  */
 type RunOutcome =
-  | { token: number; data: SimulateResponse; config: SimulationConfig }
+  | { token: number; data: SimulateResponse; config: SimulationConfig; playbook: string | null }
   | { token: number; failure: string };
 
 export function RunStateProvider({ children }: { children: ReactNode }) {
@@ -118,6 +131,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
   const [runMode, setRunMode] = useState<RunMode>("single");
   const [fixHistory, setFixHistory] = useState<FixRecord[]>([]);
   const [measuredConfig, setMeasuredConfig] = useState<SimulationConfig | null>(null);
+  const [measuredPlaybook, setMeasuredPlaybook] = useState<string | null>(null);
 
   /** Monotonic run counter; only the newest token may write state. */
   const runSeq = useRef(0);
@@ -129,6 +143,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     setIsDemoArchitecture(false);
     setFixHistory([]);
     setMeasuredConfig(null);
+    setMeasuredPlaybook(null);
   }, []);
 
   const resetArchitecture = useCallback(() => {
@@ -137,6 +152,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     setIsDemoArchitecture(true);
     setFixHistory([]);
     setMeasuredConfig(null);
+    setMeasuredPlaybook(null);
   }, []);
 
   /**
@@ -162,7 +178,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
           pb,
           runMode === "confidence" ? CONFIDENCE_SEEDS : 1,
         );
-        return { token, data, config: effective };
+        return { token, data, config: effective, playbook: pb };
       } catch (err) {
         return { token, failure: friendlyError(err) };
       }
@@ -181,6 +197,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       }
       setResult((prev) => shareResult(prev, outcome.data));
       setMeasuredConfig(outcome.config);
+      setMeasuredPlaybook(outcome.playbook);
       setError(null);
       if (payload.fixStep) setFixHistory((h) => completeRecord(h, outcome.data.summary));
     },
@@ -225,6 +242,11 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
     [config, architectureLabel, playbook, mutate, result],
   );
 
+  const measuredRun = useMemo<MeasuredRun | null>(
+    () => (measuredConfig ? { config: measuredConfig, playbook: measuredPlaybook } : null),
+    [measuredConfig, measuredPlaybook],
+  );
+
   const value = useMemo<RunStateValue>(
     () => ({
       config,
@@ -241,6 +263,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       fixHistory,
       result,
       measuredNodes: measuredConfig ? measuredConfig.topology.nodes : null,
+      measuredRun,
       error,
       isPending: run.isPending,
     }),
@@ -257,6 +280,7 @@ export function RunStateProvider({ children }: { children: ReactNode }) {
       fixHistory,
       result,
       measuredConfig,
+      measuredRun,
       error,
       run.isPending,
     ],

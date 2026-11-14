@@ -1,6 +1,9 @@
+import { exportFilename, filenameFromDisposition } from "../lib/exports";
 import type {
   CompareRequest,
   CompareResponse,
+  ExportFormatsResponse,
+  ExportRequest,
   HealthResponse,
   ImportResponse,
   PlaybookListResponse,
@@ -22,7 +25,7 @@ const API_BASE: string =
 const TIMEOUT_MS = {
   quick: 10_000, // health, playbooks, presets
   run: 60_000, // one /simulate call (single or multi-seed)
-  heavy: 180_000, // /compare — several full simulations server-side
+  heavy: 180_000, // /compare, /export — several full simulations server-side
 } as const;
 
 /** Typed error carrying the HTTP status (0 = engine unreachable or timed out). */
@@ -39,14 +42,10 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(
-  path: string,
-  init?: RequestInit,
-  timeoutMs: number = TIMEOUT_MS.quick,
-): Promise<T> {
-  let response: Response;
+/** Send one call to the engine; a host that never answers is an `ApiError` 0. */
+async function send(path: string, init: RequestInit | undefined, timeoutMs: number): Promise<Response> {
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    return await fetch(`${API_BASE}${path}`, {
       ...init,
       headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
       cache: "no-store",
@@ -64,36 +63,64 @@ async function request<T>(
       timedOut,
     );
   }
+}
 
-  const text = await response.text();
-  let body: unknown = null;
-  if (text) {
-    try {
-      body = JSON.parse(text);
-    } catch {
-      body = text;
-    }
+/** A response body as JSON when it is JSON, else as the text it is. */
+function parseBody(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
   }
+}
 
-  if (!response.ok) {
-    const hasDetail = body !== null && typeof body === "object" && "detail" in body;
-    if (hasDetail) {
-      // FastAPI's own error shape: `detail` is either a sentence or the
-      // structured validation payload.
-      const detail = (body as { detail: unknown }).detail;
-      throw new ApiError(
-        response.status,
-        typeof detail === "string" ? detail : JSON.stringify(detail),
-      );
-    }
-    // Anything else (a proxy's HTML error page, an empty body) carries no
-    // usable sentence, so the status code goes into the message — it is
-    // the only diagnosable part, and the UI renders the message verbatim.
-    const statusText = response.statusText || "request failed";
-    throw new ApiError(response.status, `${response.status} ${statusText}`);
+/** The `ApiError` for a response the engine refused, phrased from its body. */
+function refusal(response: Response, body: unknown): ApiError {
+  const hasDetail = body !== null && typeof body === "object" && "detail" in body;
+  if (hasDetail) {
+    // FastAPI's own error shape: `detail` is either a sentence or the
+    // structured validation payload.
+    const detail = (body as { detail: unknown }).detail;
+    return new ApiError(
+      response.status,
+      typeof detail === "string" ? detail : JSON.stringify(detail),
+    );
   }
+  // Anything else (a proxy's HTML error page, an empty body) carries no
+  // usable sentence, so the status code goes into the message — it is
+  // the only diagnosable part, and the UI renders the message verbatim.
+  const statusText = response.statusText || "request failed";
+  return new ApiError(response.status, `${response.status} ${statusText}`);
+}
 
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs: number = TIMEOUT_MS.quick,
+): Promise<T> {
+  const response = await send(path, init, timeoutMs);
+  const body = parseBody(await response.text());
+  if (!response.ok) throw refusal(response, body);
   return body as T;
+}
+
+/**
+ * A file download. The one response that is not JSON: a workbook is binary,
+ * and reading it as text (as `request` does) would corrupt it. A refusal is
+ * still JSON and becomes the same `ApiError` every other call throws.
+ */
+async function download(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<{ blob: Blob; disposition: string | null }> {
+  const response = await send(path, init, timeoutMs);
+  if (!response.ok) throw refusal(response, parseBody(await response.text()));
+  return {
+    blob: await response.blob(),
+    disposition: response.headers.get("Content-Disposition"),
+  };
 }
 
 export const api = {
@@ -140,6 +167,27 @@ export const api = {
     ),
 
   presets: () => request<PresetListResponse>("/presets"),
+
+  /** The formats a run can be downloaded in, in the engine's order. */
+  exportFormats: () => request<ExportFormatsResponse>("/export/formats"),
+
+  /**
+   * One run as a file. The engine simulates the request's config again, and
+   * the Excel and JSON formats carry the Fix-it plan, so this gets the long
+   * deadline. The name is the server's; a built one stands in when the
+   * header is missing.
+   */
+  exportRun: async (body: ExportRequest): Promise<{ blob: Blob; filename: string }> => {
+    const { blob, disposition } = await download(
+      "/export",
+      { method: "POST", body: JSON.stringify(body) },
+      TIMEOUT_MS.heavy,
+    );
+    return {
+      blob,
+      filename: filenameFromDisposition(disposition) ?? exportFilename(body, body.format),
+    };
+  },
 
   /** Upload an architecture (native YAML/JSON or terraform show -json) → runnable config. */
   importArchitecture: (content: string, filename?: string) =>

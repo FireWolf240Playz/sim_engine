@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
 import { ConfidencePanel } from "@/core/components/ConfidencePanel";
+import { ExportMenu } from "@/core/components/ExportMenu";
 import { FixDiffPanel } from "@/core/components/FixDiffPanel";
 import { FixHistoryList, FixOutcomePreview } from "@/core/components/FixLog";
 import { SizingTable } from "@/core/components/SizingTable";
@@ -79,6 +80,7 @@ export default function HomePage() {
     fixHistory,
     result,
     measuredNodes,
+    measuredRun,
     error,
     isPending,
   } = useRunState();
@@ -224,6 +226,12 @@ export default function HomePage() {
             // panels below jump up the page.
             <p className="text-[13px] text-ink-dim">{FIX_NOTES[fixView.note]}</p>
           ) : null}
+        </Panel>
+      ) : null}
+
+      {result && measuredRun ? (
+        <Panel title="Export" aside="the data behind this run">
+          <ExportMenu run={measuredRun} result={result} disabled={isPending} />
         </Panel>
       ) : null}
 
