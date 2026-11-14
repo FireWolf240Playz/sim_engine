@@ -34,6 +34,14 @@ class RequestRecord:
     sla_met: bool
     cache_hit: Optional[bool]
     component_times: Dict[str, float] = field(default_factory=dict)
+    #: This request's own timeout retries. The collector's ``retry_counts``
+    #: say which node was retried; this says which request paid for it.
+    retries: int = 0
+    #: The node whose slot the request never got, when that is why it failed.
+    failed_at: Optional[str] = None
+    #: Still in the system, past its budget, when the run stopped: ``end`` is
+    #: the horizon, not a finish time (see ``settle_unfinished``).
+    overdue: bool = False
 
     @property
     def latency(self) -> float:
@@ -135,8 +143,56 @@ class MetricsCollector:
                     success=False,
                     sla_met=False,
                     cache_hit=None,
+                    overdue=True,
                 )
             )
+
+    def request_log(self) -> list[dict[str, Any]]:
+        """One plain row per recorded request, in arrival order.
+
+        ``summary()`` answers "how did the run go"; this answers "which
+        requests, and why", which is what a per-request export needs. The
+        collector records at completion, so the rows are sorted back into
+        arrival order (stable: equal arrivals keep their recorded order) and
+        the records themselves are left as they were.
+
+        ``wait_time`` is everything that was not service: queueing for a slot
+        and retry backoff. An overdue request was never served to the end, so
+        its whole age at the horizon is wait.
+
+        Every value is a plain Python type, so a row serialises as strict
+        JSON and :mod:`sim_core.exports` never sees a dataclass or a numpy
+        scalar.
+        """
+        rows: list[dict[str, Any]] = []
+        for record in sorted(self.requests, key=lambda r: r.start):
+            start = float(record.start)
+            end = float(record.end)
+            latency = end - start
+            service_time = float(sum(record.component_times.values()))
+            if record.overdue:
+                outcome = "overdue"
+            elif record.success:
+                outcome = "completed"
+            else:
+                outcome = "failed"
+            rows.append(
+                {
+                    "request_id": str(record.request_id),
+                    "t": start,
+                    "end": end,
+                    "latency": latency,
+                    "service_time": service_time,
+                    "wait_time": max(0.0, latency - service_time),
+                    "outcome": outcome,
+                    "sla_met": bool(record.sla_met),
+                    "retries": int(record.retries),
+                    "cache_hit": None if record.cache_hit is None else bool(record.cache_hit),
+                    "failed_at": record.failed_at,
+                    "path": list(record.component_times),
+                }
+            )
+        return rows
 
     def record_retry(self, component_name: str) -> None:
         """Count one timeout retry against *component_name*."""

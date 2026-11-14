@@ -99,18 +99,25 @@ class CloudSimulator:
         # Single-element box so the (recursive) walk can report back the first
         # cache hit/miss it sees without changing the generator's yield types.
         cache_hit: List[Optional[bool]] = [None]
+        # Same box trick for this request's own timeout retries: the collector
+        # counts them per node, the per-request export needs them per request.
+        retries: List[int] = [0]
+        failed_at: Optional[str] = None
 
         try:
-            yield from self._walk(self.topology.entry_node, component_times, cache_hit, frozenset())
+            yield from self._walk(
+                self.topology.entry_node, component_times, cache_hit, retries, frozenset()
+            )
             success = True
         except simpy.Interrupt:
             # The request was aborted mid-flight (e.g. a hard chaos failure);
             # record it as a completion failure.
             success = False
-        except ComponentTimeoutError:
+        except ComponentTimeoutError as error:
             # All acquisition attempts for some component timed out; record
-            # the request as a completion failure.
+            # the request as a completion failure, and where it gave up.
             success = False
+            failed_at = error.component_name
 
         end = self.env.now
         latency = end - start
@@ -125,6 +132,8 @@ class CloudSimulator:
                 sla_met=sla_met,
                 cache_hit=cache_hit[0],
                 component_times=component_times,
+                retries=retries[0],
+                failed_at=failed_at,
             )
         )
 
@@ -133,6 +142,7 @@ class CloudSimulator:
         node_name: str,
         component_times: Dict[str, float],
         cache_hit: List[Optional[bool]],
+        retries: List[int],
         on_path: frozenset,
     ) -> Generator[object, None, None]:
         """Serve one node, then follow the outgoing edges this request takes.
@@ -143,7 +153,7 @@ class CloudSimulator:
         under us - fail loudly instead of hanging.
         """
         node = self.topology.component(node_name)
-        yield from self._use_component(node, component_times)
+        yield from self._use_component(node, component_times, retries)
 
         # Read-through cache semantics (live hit-rate, mutated by chaos):
         # a hit serves the response and ends this branch; a miss falls
@@ -178,7 +188,9 @@ class CloudSimulator:
                     continue
             elif self.rng.random() >= edge.probability:
                 continue  # this branch is not taken for this request
-            yield from self._walk(edge.target, component_times, cache_hit, on_path | {node_name})
+            yield from self._walk(
+                edge.target, component_times, cache_hit, retries, on_path | {node_name}
+            )
 
     def _acquire_slot(
         self, component: Component, timeout: Optional[float]
@@ -212,7 +224,7 @@ class CloudSimulator:
         return None
 
     def _use_component(
-        self, component: Component, component_times: Dict[str, float]
+        self, component: Component, component_times: Dict[str, float], retries: List[int]
     ) -> Generator[object, None, None]:
         """Acquire a slot (honouring timeout + retries), service, release.
 
@@ -224,6 +236,10 @@ class CloudSimulator:
         SimPy's ``Request.__exit__``). If all ``retry_limit + 1`` attempts
         time out, :class:`ComponentTimeoutError` is raised and the caller
         records the request as failed.
+
+        ``retries`` is the calling request's own counter (a one-element box):
+        each retry is counted there as well as against the component, so the
+        two totals always agree.
         """
         cfg = component.config
         max_attempts = cfg.retry_limit + 1
@@ -238,6 +254,7 @@ class CloudSimulator:
             # This attempt timed out; retry after a real backoff delay.
             if attempt + 1 < max_attempts:
                 self.collector.record_retry(component.name)
+                retries[0] += 1
                 yield self.env.timeout(cfg.retry_backoff)
         raise ComponentTimeoutError(component.name, max_attempts)
 

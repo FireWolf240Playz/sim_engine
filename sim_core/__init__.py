@@ -72,6 +72,7 @@ from sim_core.config import (
     TrafficPattern,
 )
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
+from sim_core.exports import EXPORT_FORMATS, render_export, to_csv, to_json, to_xlsx
 from sim_core.findings import Finding, build_findings, verdict_headline
 from sim_core.findings import Severity as FindingSeverity
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
@@ -141,6 +142,12 @@ __all__ = [
     # Right-sizing suggestions — "fix it" (roadmap 1.3)
     "Suggestion",
     "build_suggestions",
+    # Export center: per-request CSV, replayable JSON, Excel (roadmap 2.1)
+    "EXPORT_FORMATS",
+    "render_export",
+    "to_csv",
+    "to_json",
+    "to_xlsx",
     # Topology
     "Component",
     "Topology",
