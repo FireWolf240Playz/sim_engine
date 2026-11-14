@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { FindingRef, FixOutcome } from "../types";
 import { recordDelta, type FixRecord } from "../lib/fixHistory";
 
@@ -54,59 +55,80 @@ export function FixOutcomePreview({ outcome }: { outcome: FixOutcome }) {
 /**
  * The change log: every apply, the run before it, and the re-run that came
  * back. "matches the prediction" ties each re-run to the preview above.
+ *
+ * `limit` shows only the latest entries, with a toggle above them for the
+ * earlier ones, so a long session does not stretch the dashboard row.
  */
-export function FixHistoryList({ history }: { history: FixRecord[] }) {
+export function FixHistoryList({ history, limit }: { history: FixRecord[]; limit?: number }) {
+  const [showAll, setShowAll] = useState(false);
+  const earlier = limit !== undefined ? Math.max(0, history.length - limit) : 0;
+  const shown = showAll || earlier === 0 ? history : history.slice(earlier);
+
   return (
-    <ol className="flex flex-col gap-3">
-      {history.map((record) => {
-        const { cleared, introduced } = recordDelta(record);
-        const money = fmtMonthly(record.monthlyDelta);
-        const predicted = record.predicted?.score_after ?? null;
-        const matches =
-          record.after !== null && predicted !== null && record.after.score === predicted;
-        return (
-          <li
-            key={record.step}
-            className="rounded-lg border border-line bg-surface-0/60 px-4 py-3 text-[13px] leading-6"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-x-4">
-              <p className="font-semibold text-ink">
-                Fix {record.step}
-                {record.playbook ? (
-                  <span className="font-normal text-ink-dim">
-                    {" "}
-                    under {record.playbook.replace(/_/g, " ")}
-                  </span>
-                ) : null}
-              </p>
-              {money ? <span className="font-mono text-ink-dim">{money}</span> : null}
-            </div>
-            <p className="font-mono text-ink-dim">
-              {record.changes.map((c) => `${c.node} ${c.before}→${c.after}`).join(" · ")}
-            </p>
-            {record.failed ? (
-              <p className="text-sev-crit">The re-run failed; nothing was measured.</p>
-            ) : record.after === null ? (
-              <p className="text-ink-dim">Re-running…</p>
-            ) : (
-              <>
-                <p className="text-ink">
-                  score <span className="font-mono">{fmtScore(record.before.score)}</span> →{" "}
-                  <span className="font-mono font-semibold">{fmtScore(record.after.score)}</span>
-                  {record.after.band ? ` · ${record.after.band}` : null}
-                  {matches ? (
-                    <span className="text-ink-dim"> · matches the prediction</span>
+    <div className="flex flex-col gap-3">
+      {earlier > 0 ? (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          aria-expanded={showAll}
+          className="self-start text-[13px] font-medium text-accent outline-none transition-colors hover:text-accent-2 focus-visible:underline"
+        >
+          {showAll
+            ? "show only the latest"
+            : `show ${earlier} earlier change${earlier > 1 ? "s" : ""}`}
+        </button>
+      ) : null}
+      <ol className="flex flex-col gap-3">
+        {shown.map((record) => {
+          const { cleared, introduced } = recordDelta(record);
+          const money = fmtMonthly(record.monthlyDelta);
+          const predicted = record.predicted?.score_after ?? null;
+          const matches =
+            record.after !== null && predicted !== null && record.after.score === predicted;
+          return (
+            <li
+              key={record.step}
+              className="rounded-lg border border-line bg-surface-0/60 px-4 py-3 text-[13px] leading-6"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+                <p className="font-semibold text-ink">
+                  Fix {record.step}
+                  {record.playbook ? (
+                    <span className="font-normal text-ink-dim">
+                      {" "}
+                      under {record.playbook.replace(/_/g, " ")}
+                    </span>
                   ) : null}
                 </p>
-                {cleared.length ? <p className="text-sev-ok">Cleared {names(cleared)}.</p> : null}
-                {introduced.length ? (
-                  <p className="text-sev-crit">New: {names(introduced)}.</p>
-                ) : null}
-              </>
-            )}
-          </li>
-        );
-      })}
-    </ol>
+                {money ? <span className="font-mono text-ink-dim">{money}</span> : null}
+              </div>
+              <p className="font-mono text-ink-dim">
+                {record.changes.map((c) => `${c.node} ${c.before}→${c.after}`).join(" · ")}
+              </p>
+              {record.failed ? (
+                <p className="text-sev-crit">The re-run failed; nothing was measured.</p>
+              ) : record.after === null ? (
+                <p className="text-ink-dim">Re-running…</p>
+              ) : (
+                <>
+                  <p className="text-ink">
+                    score <span className="font-mono">{fmtScore(record.before.score)}</span> →{" "}
+                    <span className="font-mono font-semibold">{fmtScore(record.after.score)}</span>
+                    {record.after.band ? ` · ${record.after.band}` : null}
+                    {matches ? (
+                      <span className="text-ink-dim"> · matches the prediction</span>
+                    ) : null}
+                  </p>
+                  {cleared.length ? <p className="text-sev-ok">Cleared {names(cleared)}.</p> : null}
+                  {introduced.length ? (
+                    <p className="text-sev-crit">New: {names(introduced)}.</p>
+                  ) : null}
+                </>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }

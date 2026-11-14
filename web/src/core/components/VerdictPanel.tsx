@@ -75,6 +75,16 @@ export function VerdictPanel({
   seeds?: number[] | null;
 }) {
   const [reportOpen, setReportOpen] = useState(false);
+  // Findings are one-line rows; these are the ones the user opened. Keyed
+  // by id + node, so an open finding stays open when a re-run still has it.
+  const [openKeys, setOpenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setOpenKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   const rows = summary?.findings ?? [];
   const score = summary?.resilience_score ?? null;
@@ -94,7 +104,8 @@ export function VerdictPanel({
   const cappedBy = explanation?.band_capped_by ?? null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-surface-1 shadow-card">
+    // h-full: in a dashboard row the verdict is as tall as its neighbour.
+    <div className="h-full overflow-hidden rounded-xl border border-line bg-surface-1 shadow-card">
       {/* Overall-tone accent: the whole verdict reads as one color story. */}
       <div className={`h-1 w-full ${tone === "neutral" ? "bg-surface-2" : SEVERITY_BG[tone]}`} />
 
@@ -176,9 +187,14 @@ export function VerdictPanel({
               </div>
             </div>
 
-            <div className="mt-5 flex flex-col gap-3">
+            <div className="mt-5 flex flex-col gap-2">
               {findingKeys(rows).map((key, i) => (
-                <FindingCard key={key} finding={rows[i]} />
+                <FindingCard
+                  key={key}
+                  finding={rows[i]}
+                  open={openKeys.has(key)}
+                  onToggle={() => toggle(key)}
+                />
               ))}
             </div>
           </>

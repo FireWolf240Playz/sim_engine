@@ -28,6 +28,17 @@ const RUN_MODES: Array<{ mode: RunMode; label: string }> = [
   { mode: "confidence", label: `${CONFIDENCE_SEEDS}-seed confidence` },
 ];
 
+/**
+ * Dashboard rows. The Fix-it table needs more width than the verdict, so it
+ * gets the wider share; that also brings the two cards to similar heights.
+ */
+const ROW = "grid gap-4 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]";
+/** Timeline beside the confidence profile: both ~400px tall. */
+const EVIDENCE_ROW = "grid gap-4 xl:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]";
+
+/** Change-log entries shown before "show earlier changes". */
+const CHANGES_SHOWN = 2;
+
 /** Stable identity for "no edges", so memo props never churn on `?? []`. */
 const NO_EDGES: TopologyEdge[] = [];
 
@@ -247,10 +258,14 @@ export default function HomePage() {
           </div>
         ) : null}
 
+        {/* Rows, not two independent columns: cards side by side share a
+            height, so no hole opens between them whichever one a run makes
+            taller. Only cards of similar height are paired; the rest take a
+            full row. */}
         {result ? (
-          <div className="grid items-start gap-4 xl:grid-cols-12">
-            {/* Left: what is wrong, and how sure the score is. */}
-            <div className="flex min-w-0 flex-col gap-4 xl:col-span-6">
+          <div className={ROW}>
+            {/* What is wrong ... */}
+            <div className="min-w-0">
               <VerdictPanel
                 summary={result.summary}
                 context={context}
@@ -258,24 +273,15 @@ export default function HomePage() {
                 seeds={result.seeds ?? null}
                 fixHistory={fixHistory}
               />
-
-              {result.profile ? (
-                <Panel
-                  title="Confidence across seeds"
-                  aside={
-                    result.seeds && result.seeds.length > 0
-                      ? `seeds ${result.seeds.join(" · ")}`
-                      : undefined
-                  }
-                >
-                  <ConfidencePanel profile={result.profile} />
-                </Panel>
-              ) : null}
             </div>
 
-            {/* Right: what to change, then the evidence. */}
-            <div className="flex min-w-0 flex-col gap-4 xl:col-span-6">
-              <Panel title="Fix it" aside="sizes verified by simulation on the same seed">
+            {/* ... and what to change. The last card fills the row. */}
+            <div className="flex min-w-0 flex-col gap-4">
+              <Panel
+                title="Fix it"
+                aside="sizes verified by simulation on the same seed"
+                className={fixHistory.length ? undefined : "flex-1"}
+              >
                 {fixView.outcome && result.summary.fix_outcome ? (
                   <FixOutcomePreview outcome={result.summary.fix_outcome} />
                 ) : null}
@@ -294,34 +300,8 @@ export default function HomePage() {
               </Panel>
 
               {fixHistory.length ? (
-                <Panel title="Changes applied" aside="each one re-run and measured">
-                  <FixHistoryList history={fixHistory} />
-                </Panel>
-              ) : null}
-
-              {sizing ? (
-                <Panel
-                  title="Timeline"
-                  aside={
-                    result.typical_seed != null
-                      ? `typical run · seed ${result.typical_seed}`
-                      : "latency vs chaos, one clock"
-                  }
-                >
-                  <TimelineChart
-                    ticks={result.timeseries ?? []}
-                    slaTarget={config.sla_target}
-                    windows={chaosWindows(result.chaos, config.traffic.duration)}
-                    horizon={config.traffic.duration}
-                    band={result.timeseries_band}
-                    seedCount={result.seeds?.length}
-                  />
-                </Panel>
-              ) : null}
-
-              {sizing ? (
-                <Panel title="Sizing" aside="where the money sits">
-                  <SizingTable nodes={config.topology.nodes} sizing={sizing} stale={stale} />
+                <Panel title="Changes applied" aside="each one re-run and measured" className="flex-1">
+                  <FixHistoryList history={fixHistory} limit={CHANGES_SHOWN} />
                 </Panel>
               ) : null}
             </div>
@@ -329,6 +309,49 @@ export default function HomePage() {
         ) : (
           !error && <EmptyState />
         )}
+
+        {result && sizing ? (
+          <div className={result.profile ? EVIDENCE_ROW : undefined}>
+            <Panel
+              title="Timeline"
+              aside={
+                result.typical_seed != null
+                  ? `typical run · seed ${result.typical_seed}`
+                  : "latency vs chaos, one clock"
+              }
+              className="h-full"
+            >
+              <TimelineChart
+                ticks={result.timeseries ?? []}
+                slaTarget={config.sla_target}
+                windows={chaosWindows(result.chaos, config.traffic.duration)}
+                horizon={config.traffic.duration}
+                band={result.timeseries_band}
+                seedCount={result.seeds?.length}
+              />
+            </Panel>
+
+            {result.profile ? (
+              <Panel
+                title="Confidence across seeds"
+                aside={
+                  result.seeds && result.seeds.length > 0
+                    ? `seeds ${result.seeds.join(" · ")}`
+                    : undefined
+                }
+                className="h-full"
+              >
+                <ConfidencePanel profile={result.profile} />
+              </Panel>
+            ) : null}
+          </div>
+        ) : null}
+
+        {result && sizing ? (
+          <Panel title="Sizing" aside="where the money sits">
+            <SizingTable nodes={config.topology.nodes} sizing={sizing} stale={stale} />
+          </Panel>
+        ) : null}
       </div>
     </div>
   );
