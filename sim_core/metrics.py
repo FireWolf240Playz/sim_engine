@@ -64,6 +64,13 @@ class MetricsCollector:
         self.requests: List[RequestRecord] = []
         self.utilization: List[UtilizationSample] = []
         self.retry_counts: Dict[str, int] = {}
+        #: Per component, exact (counted at every acquisition, not sampled):
+        #: how many acquisitions had to queue, and the most slots ever held
+        #: after a grant that did not queue. A node nobody waited for replays
+        #: the same events at any larger size, which is what lets
+        #: :mod:`sim_core.rightsize` skip runs that cannot differ.
+        self.wait_counts: dict[str, int] = {}
+        self.peak_in_use: dict[str, int] = {}
         self.cost_by_component: Dict[str, float] = {}
         #: Provisioned (traffic-independent) portion of the total bill, per
         #: component: ``cost_per_hour * capacity * dt_hours``. The remainder
@@ -135,6 +142,15 @@ class MetricsCollector:
         """Count one timeout retry against *component_name*."""
         self.retry_counts[component_name] = self.retry_counts.get(component_name, 0) + 1
 
+    def record_wait(self, component_name: str) -> None:
+        """Count one slot acquisition that found no free slot and queued."""
+        self.wait_counts[component_name] = self.wait_counts.get(component_name, 0) + 1
+
+    def record_in_use(self, component_name: str, in_use: int) -> None:
+        """Note the slots held right after one was granted without a wait."""
+        if in_use > self.peak_in_use.get(component_name, 0):
+            self.peak_in_use[component_name] = in_use
+
     @property
     def total_retries(self) -> int:
         """Total timeout retries across all components this run."""
@@ -202,7 +218,10 @@ class MetricsCollector:
             rate = comp.config.cost_per_hour
             if rate <= 0.0:
                 continue
-            billed_slots = comp.capacity + comp.in_use + comp.queue_length
+            # The configured size, not the live one: a node that chaos took
+            # down is still on the bill, so an outage is never a discount.
+            provisioned = comp.config.max_capacity
+            billed_slots = provisioned + comp.in_use + comp.queue_length
             self.cost_by_component[comp.name] = (
                 self.cost_by_component.get(comp.name, 0.0)
                 + rate * billed_slots * (dt / 3600.0)  # rate is $/hour, dt is in seconds
@@ -211,7 +230,7 @@ class MetricsCollector:
             # not they are busy. Metered part = total - base, implicitly.
             self.cost_base_by_component[comp.name] = (
                 self.cost_base_by_component.get(comp.name, 0.0)
-                + rate * comp.capacity * (dt / 3600.0)
+                + rate * provisioned * (dt / 3600.0)
             )
         self._last_sample_time = env_now
 
@@ -244,7 +263,10 @@ class MetricsCollector:
             name = comp.name
             util = np.array([s.per_component[name]["utilization"] for s in self.utilization])
             queue = np.array([s.per_component[name]["queue_length"] for s in self.utilization])
-            demand = util * comp.capacity + queue  # == in_use + queue per sample
+            in_use = np.array([s.per_component[name]["in_use"] for s in self.utilization])
+            # The slots held at each sample, not utilisation x capacity:
+            # chaos changes the capacity mid-run, the samples kept the truth.
+            demand = in_use + queue
             mean_utilization = float(np.mean(util))
             p95_utilization = float(np.percentile(util, 95))
             p95_queue = float(np.percentile(queue, 95))
@@ -254,6 +276,8 @@ class MetricsCollector:
                 "p95_queue": p95_queue,
                 "recommended_capacity": max(1, int(np.ceil(np.percentile(demand, 99)))),
                 "status": self._verdict(mean_utilization),
+                "waited_requests": self.wait_counts.get(name, 0),
+                "peak_in_use": self.peak_in_use.get(name, 0),
             }
 
     def summary(self) -> Dict[str, Any]:

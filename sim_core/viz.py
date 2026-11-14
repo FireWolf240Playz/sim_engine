@@ -12,6 +12,7 @@ line chart with the knee marked for capacity sweeps.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Union
 
@@ -21,17 +22,30 @@ from sim_core.metrics import MetricsCollector
 from sim_core.score import score_color
 
 
+def _pyplot(headless: bool) -> Any:
+    """Import pyplot (lazily: matplotlib is only needed to draw).
+
+    A headless render selects the Agg backend, but only when nothing has
+    imported pyplot yet. The backend is process-wide state: switching it
+    under a host that already chose one (a notebook, a GUI app) would change
+    how *its* figures behave. Saving to a file works on any backend.
+    """
+    import matplotlib
+
+    if headless and "matplotlib.pyplot" not in sys.modules:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    return plt
+
+
 def render_report(
     collector: MetricsCollector,
     output_path: Union[str, Path] = "eleven_report.png",
     show: bool = False,
 ) -> Path:
     """Build and save the resilience report. Returns the output path."""
-    import matplotlib
-
-    if not show:
-        matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _pyplot(headless=not show)
 
     summary: Dict[str, Any] = collector.summary()
     if summary["requests"] == 0:
@@ -141,10 +155,7 @@ def render_comparison(
     are :class:`sim_core.compare.RunResult` objects (duck-typed: need
     ``label``, ``summary``, ``parameter_value``).
     """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+    plt = _pyplot(headless=True)
 
     if kind == "sweep":
         ordered = sorted(

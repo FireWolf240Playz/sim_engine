@@ -23,7 +23,7 @@ cycles are impossible.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 # ---------------------------------------------------------------------------
 # Weights and bands — the single source of truth for the scoring formulas.
@@ -105,6 +105,33 @@ def resilience_score(summary: Dict[str, Any]) -> Optional[float]:
     Returns ``None`` when the summary has no requests (nothing to score).
     Deterministic: the same dict always yields the same score.
     """
+    parts = _score_parts(summary)
+    return None if parts is None else round(min(100.0, max(0.0, parts.raw)), 1)
+
+
+class _ScoreParts(NamedTuple):
+    """The score formula's inputs and terms, unrounded."""
+
+    requests: int
+    sla: float
+    completion: float
+    failed: int
+    retries: int
+    failed_points: float
+    retry_points: float
+    headroom_points: float
+    #: The blend minus the three penalties, before the 0..100 clamp.
+    raw: float
+
+
+def _score_parts(summary: dict[str, Any]) -> _ScoreParts | None:
+    """The one place the resilience formula is evaluated.
+
+    :func:`resilience_score` and :func:`score_explanation` both read this, so
+    the explanation cannot drift from the score it explains: not in its
+    inputs, and not in the last decimal either (the same terms added in a
+    different order round differently).
+    """
     n = summary.get("requests") or 0
     if n <= 0:
         return None
@@ -116,26 +143,47 @@ def resilience_score(summary: Dict[str, Any]) -> Optional[float]:
     if completion is None:
         completion = 0.0
 
-    score = 100.0 * (SLA_WEIGHT * sla + COMPLETION_WEIGHT * completion)
+    raw = 100.0 * (SLA_WEIGHT * sla + COMPLETION_WEIGHT * completion)
 
     failed = summary.get("failed_requests") or 0
-    score -= FAILED_PENALTY * min(1.0, failed / n)
+    failed_points = FAILED_PENALTY * min(1.0, failed / n)
+    raw -= failed_points
 
     retries = summary.get("total_retries") or 0
-    score -= RETRY_PENALTY * min(1.0, retries / n)
+    retry_points = RETRY_PENALTY * min(1.0, retries / n)
+    raw -= retry_points
 
     sla_target = summary.get("sla_target")
     p95 = summary.get("p95_latency")
+    headroom_points = 0.0
     if sla_target and p95 is not None and p95 > sla_target:
         overage = (p95 - sla_target) / sla_target
-        score -= HEADROOM_PENALTY * min(1.0, overage)
+        headroom_points = HEADROOM_PENALTY * min(1.0, overage)
+        raw -= headroom_points
 
-    return round(min(100.0, max(0.0, score)), 1)
+    return _ScoreParts(
+        requests=n,
+        sla=sla,
+        completion=completion,
+        failed=failed,
+        retries=retries,
+        failed_points=failed_points,
+        retry_points=retry_points,
+        headroom_points=headroom_points,
+        raw=raw,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Cost grade
 # ---------------------------------------------------------------------------
+
+def _sizing_label(info: Any) -> str:
+    """One node's sizing label: the verified one when present, else the guess."""
+    if not isinstance(info, dict):
+        return str(None)
+    return str(info.get("verified_status") or info.get("status"))
+
 
 def cost_grade(summary: Dict[str, Any]) -> Optional[str]:
     """Compute the 'A'..'F' cost grade from a summary dict.
@@ -147,7 +195,10 @@ def cost_grade(summary: Dict[str, Any]) -> Optional[str]:
     - **sizing_quality** — mean per-component credit from
       ``component_sizing``: ``right_sized = 1.0``, ``oversized = 0.5``,
       ``undersized = 0.0``. Undersized is scored worst on purpose: it is a
-      reliability risk, not just a cost one.
+      reliability risk, not just a cost one. Each node is graded on its
+      ``verified_status`` when the summary carries one (the label "Fix it"
+      proved by simulation), else on the utilisation ``status``; the grade
+      and the sizing table therefore never disagree.
     - **cost_efficiency** — ``1 - (share of total cost sitting on oversized
       components)``, from ``cost_breakdown_by_component`` +
       ``component_sizing``. When no rates are configured (total cost 0),
@@ -165,7 +216,8 @@ def cost_grade(summary: Dict[str, Any]) -> Optional[str]:
     if not sizing:
         return None
 
-    statuses = [str(info.get("status")) for info in sizing.values()]
+    labels = {name: _sizing_label(info) for name, info in sizing.items()}
+    statuses = list(labels.values())
     credits = [SIZING_CREDIT.get(status, 0.5) for status in statuses]
     sizing_quality = sum(credits) / len(credits)
 
@@ -173,9 +225,7 @@ def cost_grade(summary: Dict[str, Any]) -> Optional[str]:
     breakdown = summary.get("cost_breakdown_by_component") or {}
     if total_cost > 0.0:
         oversized_cost = sum(
-            float(cost)
-            for name, cost in breakdown.items()
-            if str((sizing.get(name) or {}).get("status")) == "oversized"
+            float(cost) for name, cost in breakdown.items() if labels.get(name) == "oversized"
         )
         cost_efficiency = 1.0 - oversized_cost / total_cost
     else:
@@ -385,39 +435,18 @@ def score_explanation(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     Returns ``None`` when the summary has no requests (nothing to score —
     mirrors :func:`resilience_score`).
     """
-    n = summary.get("requests") or 0
-    if n <= 0:
+    parts = _score_parts(summary)
+    if parts is None:
         return None
-
-    sla = summary.get("sla_compliance")
-    if sla is None:
-        sla = 1.0  # no compliance figure in the dict ⇒ nothing to deduct
-    completion = summary.get("completion_rate")
-    if completion is None:
-        completion = 0.0
+    n, sla, completion = parts.requests, parts.sla, parts.completion
+    failed, retries = parts.failed, parts.retries
+    failed_points, retry_points = parts.failed_points, parts.retry_points
+    headroom_points, raw = parts.headroom_points, parts.raw
+    sla_target, p95 = summary.get("sla_target"), summary.get("p95_latency")
 
     sla_points = 100.0 * SLA_WEIGHT * sla
     completion_points = 100.0 * COMPLETION_WEIGHT * completion
 
-    failed = summary.get("failed_requests") or 0
-    failed_points = FAILED_PENALTY * min(1.0, failed / n)
-
-    retries = summary.get("total_retries") or 0
-    retry_points = RETRY_PENALTY * min(1.0, retries / n)
-
-    sla_target = summary.get("sla_target")
-    p95 = summary.get("p95_latency")
-    headroom_points = 0.0
-    if sla_target and p95 is not None and p95 > sla_target:
-        headroom_points = HEADROOM_PENALTY * min(1.0, (p95 - sla_target) / sla_target)
-
-    raw = (
-        sla_points
-        + completion_points
-        - failed_points
-        - retry_points
-        - headroom_points
-    )
     clamped = (min(100.0, max(0.0, raw)) != raw)
     final = round(min(100.0, max(0.0, raw)), 1)
 

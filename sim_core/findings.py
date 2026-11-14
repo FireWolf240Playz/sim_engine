@@ -333,13 +333,18 @@ def _p95_headroom(summary: dict[str, Any]) -> list[Finding]:
 
 def _undersized(summary: dict[str, Any]) -> list[Finding]:
     """A node the sizing pass flags ``undersized`` is a warn — it is
-    below the demand the run actually produced."""
+    below the demand the run actually produced. A node past the weak-link
+    line is skipped: :func:`_util_weak_link` already reports it as a crit,
+    and the same fact twice would take two of the five places."""
     sizing = summary.get("component_sizing")
     if not isinstance(sizing, dict):
         return []
     findings: list[Finding] = []
     for name, info in sizing.items():
         if not isinstance(info, dict) or info.get("status") != "undersized":
+            continue
+        pinned = _as_fraction(info.get("mean_utilization"))
+        if pinned is not None and pinned > _UTILIZATION_CRIT:
             continue
         name = str(name)
         recommended = info.get("recommended_capacity")

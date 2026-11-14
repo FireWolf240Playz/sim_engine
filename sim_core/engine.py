@@ -15,8 +15,9 @@ import numpy as np
 import simpy
 
 from sim_core import chaos as chaos_mod
-from sim_core.config import ChaosEvent, SimulationConfig
+from sim_core.config import ChaosEvent, Edge, SimulationConfig
 from sim_core.metrics import MetricsCollector, RequestRecord
+from sim_core.score import cost_grade
 from sim_core.traffic import generate_traffic
 from sim_core.topology import Component, Topology
 
@@ -53,7 +54,16 @@ class CloudSimulator:
         # what chaos/service behavior does differs between runs. (A single
         # shared stream would let scenario behavior shift *which* random values
         # the arrival process consumes, confounding any A/B comparison.)
-        self._arrival_rng, self.rng = np.random.default_rng(config.seed).spawn(2)
+        #
+        # A config without a seed still runs on one: it is drawn here and
+        # kept, so the run can be replayed and "Fix it" can verify its plan
+        # against this very run instead of an unrelated one.
+        self.seed: int = (
+            config.seed
+            if config.seed is not None
+            else int(np.random.SeedSequence().generate_state(1)[0])
+        )
+        self._arrival_rng, self.rng = np.random.default_rng(self.seed).spawn(2)
         self.topology = Topology(self.env, config.topology)
         self.collector = MetricsCollector(self.topology, sla_target=config.sla_target)
         self._req_counter = 0
@@ -66,7 +76,9 @@ class CloudSimulator:
         sampled service time, release). A node's outgoing edges are each
         followed *independently* with their configured probability, so a node
         can fan out to several downstream components (e.g. a worker calling
-        two services), each visited with its own probability. A ``cache``-role
+        two services), each visited with its own probability. Edges that
+        share a ``group`` are alternatives instead: the request takes at most
+        one of them (a load balancer picking a backend). A ``cache``-role
         node decides hit/miss from its *live* hit-rate (so ``cache_outage``
         chaos still steers real traffic): a hit serves the response locally
         and the branch ends; a miss continues along the cache's outgoing
@@ -145,13 +157,26 @@ class CloudSimulator:
             if hit:
                 return
 
+        # Per group of alternative edges: the one this request takes (or None).
+        picked: dict[str, Edge | None] | None = None
         for edge in self.topology.outgoing_edges(node_name):
             if edge.target in on_path:
                 raise ValueError(
                     f"cycle detected in the request path (re-entering node "
                     f"{edge.target!r}) - the graph must be a DAG"
                 )
-            if self.rng.random() >= edge.probability:
+            if edge.group is not None:
+                # Alternatives: one draw picks among the whole group, made
+                # when the walk reaches the group's first edge.
+                if picked is None:
+                    picked = {}
+                if edge.group not in picked:
+                    picked[edge.group] = self.topology.choose(
+                        node_name, edge.group, float(self.rng.random())
+                    )
+                if picked[edge.group] is not edge:
+                    continue
+            elif self.rng.random() >= edge.probability:
                 continue  # this branch is not taken for this request
             yield from self._walk(edge.target, component_times, cache_hit, on_path | {node_name})
 
@@ -166,6 +191,12 @@ class CloudSimulator:
         resource queue, and an interrupt while waiting cancels it the same way.
         """
         req = component.resource.request()
+        # SimPy grants a free slot inside ``request()``, so this is exact:
+        # the request either holds a slot already or has joined the queue.
+        if req.triggered:
+            self.collector.record_in_use(component.name, component.in_use)
+        else:
+            self.collector.record_wait(component.name)
         try:
             if timeout is None:
                 yield req
@@ -248,7 +279,8 @@ class CloudSimulator:
             # local: rightsize imports this module
             from sim_core.rightsize import plan_fix, verified_sizing
 
-            plan = plan_fix(self.config, summary)
+            # On this run's own seed, so the plan's "before" is this summary.
+            plan = plan_fix(self.config.model_copy(update={"seed": self.seed}), summary)
             summary["suggestions"] = plan["suggestions"]
             # Before → after of applying every suggestion, from the same
             # verification runs: what "Fix it" will do, and what it can't.
@@ -263,6 +295,9 @@ class CloudSimulator:
                     if isinstance(info, dict):
                         info["verified_status"] = status
                         info["verified_capacity"] = capacity
+            # The grade reads those labels, so it is taken again now that
+            # they exist: the grade and the sizing table say the same thing.
+            summary["cost_grade"] = cost_grade(summary)
         return summary
 
     # -- convenience -------------------------------------------------------

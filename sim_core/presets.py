@@ -32,15 +32,20 @@ per-request latency, which is exactly what ``eleven compare multi-cloud``
 compares. Live prices move; for exact rates use the ``eleven aws-prices`` /
 ``eleven prices`` / ``eleven gcp-prices`` catalog commands instead.
 
-Customizing: the models are frozen, so tune a preset with
-``model_copy(update={...})`` rather than re-inventing it::
+Cost: ``cost_per_hour`` is a rate **per slot**. Each preset spreads its
+instance's hourly list price over its slots, so an idle preset bills exactly
+that list price and a busy one adds the metered part on top.
 
-    db = aws_rds_small().model_copy(update={"max_capacity": 4, "cost_per_hour": 0.2})
+Customizing: the models are frozen, so tune a preset with
+``model_copy(update={...})`` rather than re-inventing it (more slots at the
+same per-slot rate is a proportionally larger instance)::
+
+    db = aws_rds_small().model_copy(update={"max_capacity": 24})
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, TypeVar
+from typing import Any, Dict, Protocol, TypeVar
 
 from sim_core.config import (
     AppWorkerConfig,
@@ -51,6 +56,12 @@ from sim_core.config import (
 )
 
 _ConfigT = TypeVar("_ConfigT", bound=ComponentConfig)
+
+
+class PresetFactory(Protocol):
+    """A preset: called with an optional node name, returns a ready config."""
+
+    def __call__(self, name: str | None = None) -> ComponentConfig: ...
 
 __all__ = [
     "PRESETS",
@@ -75,10 +86,16 @@ def _preset(
     name: str,
     max_capacity: int,
     service_time: float,
-    cost_per_hour: float,
+    list_price_per_hour: float,
     **extra: Any,
 ) -> _ConfigT:
     """Build one preset config (private helper shared by all presets).
+
+    ``list_price_per_hour`` is what the provider charges for the whole
+    instance. ``ComponentConfig.cost_per_hour`` is a rate *per slot*, so the
+    list price is spread over the preset's slots: the provisioned part of the
+    bill for an untouched preset is then exactly its list price, and the
+    metered part scales with how busy those slots are.
 
     ``extra`` carries subclass-specific fields (e.g. ``hit_rate`` for cache
     presets). All values are validated by the frozen Pydantic models.
@@ -87,7 +104,7 @@ def _preset(
         name=name,
         max_capacity=max_capacity,
         service_time=service_time,
-        cost_per_hour=cost_per_hour,
+        cost_per_hour=list_price_per_hour / max_capacity,
         **extra,
     )
 
@@ -101,7 +118,7 @@ def aws_alb(name: str | None = None) -> LoadBalancerConfig:
     """AWS Application Load Balancer, small tier (us-east-1).
 
     Approximates an ALB at light load: ~$0.0225/h per load balancer plus
-    ~$0.008/LCU-h; ``cost_per_hour=0.05`` covers the hourly fee and a modest
+    ~$0.008/LCU-h; a $0.05/h list price covers the hourly fee and a modest
     LCU load. Mid-pack per-request latency of the three providers. Directional
     estimate, not a benchmark.
     """
@@ -110,7 +127,7 @@ def aws_alb(name: str | None = None) -> LoadBalancerConfig:
         name=name or "aws-alb",
         max_capacity=200,
         service_time=0.2,
-        cost_per_hour=0.05,
+        list_price_per_hour=0.05,
     )
 
 
@@ -118,7 +135,7 @@ def aws_app_worker(name: str | None = None) -> AppWorkerConfig:
     """AWS EC2 app worker, small general-purpose tier (us-east-1).
 
     Approximates a t3.small/t3.medium-class instance (2 vCPU, 2-4 GiB,
-    ~$0.02-0.04/h); ``cost_per_hour=0.05`` is a rounded per-slot rate.
+    ~$0.02-0.04/h); $0.05/h is a rounded-up list price for the instance.
     Dedicated vCPUs give the most concurrent slots of the three small tiers
     (8) at the fastest per-request service (1.2s). Directional estimate, not
     a benchmark.
@@ -128,7 +145,7 @@ def aws_app_worker(name: str | None = None) -> AppWorkerConfig:
         name=name or "aws-worker",
         max_capacity=8,
         service_time=1.2,
-        cost_per_hour=0.05,
+        list_price_per_hour=0.05,
     )
 
 
@@ -145,7 +162,7 @@ def aws_elasticache(name: str | None = None) -> CacheConfig:
         name=name or "aws-elasticache",
         max_capacity=400,
         service_time=0.05,
-        cost_per_hour=0.05,
+        list_price_per_hour=0.05,
         hit_rate=0.85,
     )
 
@@ -162,7 +179,7 @@ def aws_rds_small(name: str | None = None) -> DatabaseConfig:
         name=name or "aws-rds",
         max_capacity=12,
         service_time=2.5,
-        cost_per_hour=0.05,
+        list_price_per_hour=0.05,
     )
 
 
@@ -175,7 +192,7 @@ def azure_app_gateway(name: str | None = None) -> LoadBalancerConfig:
     """Azure Application Gateway, Basic v2 tier (eastus class).
 
     Application Gateway bills an instance hourly fee plus LCU-hours;
-    ``cost_per_hour=0.08`` approximates a small gateway at light load.
+    $0.08/h approximates a small gateway at light load.
     Deeper per-request L7 inspection makes it the slowest gateway per request
     of the three (0.25s). Directional estimate, not a benchmark.
     """
@@ -184,7 +201,7 @@ def azure_app_gateway(name: str | None = None) -> LoadBalancerConfig:
         name=name or "azure-app-gateway",
         max_capacity=200,
         service_time=0.25,
-        cost_per_hour=0.08,
+        list_price_per_hour=0.08,
     )
 
 
@@ -201,7 +218,7 @@ def azure_app_worker(name: str | None = None) -> AppWorkerConfig:
         name=name or "azure-worker",
         max_capacity=6,
         service_time=1.6,
-        cost_per_hour=0.08,
+        list_price_per_hour=0.08,
     )
 
 
@@ -217,7 +234,7 @@ def azure_cache(name: str | None = None) -> CacheConfig:
         name=name or "azure-cache",
         max_capacity=300,
         service_time=0.08,
-        cost_per_hour=0.03,
+        list_price_per_hour=0.03,
         hit_rate=0.85,
     )
 
@@ -234,7 +251,7 @@ def azure_sql_small(name: str | None = None) -> DatabaseConfig:
         name=name or "azure-sql",
         max_capacity=8,
         service_time=3.5,
-        cost_per_hour=0.05,
+        list_price_per_hour=0.05,
     )
 
 
@@ -247,7 +264,7 @@ def gcp_lb(name: str | None = None) -> LoadBalancerConfig:
     """Google Cloud external HTTP(S) load balancer, small tier.
 
     ~$0.021/h for the forwarding rule + backend, plus data-processing fees;
-    ``cost_per_hour=0.03`` is a small-LB ballpark. The lightest per-request
+    $0.03/h is a small-LB ballpark. The lightest per-request
     processing of the three (0.15s). Directional estimate, not a benchmark.
     """
     return _preset(
@@ -255,7 +272,7 @@ def gcp_lb(name: str | None = None) -> LoadBalancerConfig:
         name=name or "gcp-lb",
         max_capacity=200,
         service_time=0.15,
-        cost_per_hour=0.03,
+        list_price_per_hour=0.03,
     )
 
 
@@ -263,7 +280,7 @@ def gcp_app_worker(name: str | None = None) -> AppWorkerConfig:
     """Google Compute Engine app worker, e2-small class (us-central1).
 
     e2-small is 2 *shared* vCPU + 2 GiB; cores bill ~$0.025/h each plus RAM,
-    so ``cost_per_hour=0.06`` per slot. Shared vCPUs mean the fewest
+    so $0.06/h for the instance. Shared vCPUs mean the fewest
     concurrent slots of the three small tiers (4). Directional estimate, not
     a benchmark.
     """
@@ -272,7 +289,7 @@ def gcp_app_worker(name: str | None = None) -> AppWorkerConfig:
         name=name or "gcp-worker",
         max_capacity=4,
         service_time=1.5,
-        cost_per_hour=0.06,
+        list_price_per_hour=0.06,
     )
 
 
@@ -288,7 +305,7 @@ def gcp_memorystore(name: str | None = None) -> CacheConfig:
         name=name or "gcp-memorystore",
         max_capacity=150,
         service_time=0.06,
-        cost_per_hour=0.035,
+        list_price_per_hour=0.035,
         hit_rate=0.85,
     )
 
@@ -306,14 +323,14 @@ def gcp_cloud_sql_small(name: str | None = None) -> DatabaseConfig:
         name=name or "gcp-cloud-sql",
         max_capacity=6,
         service_time=3.0,
-        cost_per_hour=0.05,
+        list_price_per_hour=0.05,
     )
 
 
 #: Registry of every preset, keyed by preset name. Handy for tooling
 #: (e.g. a frontend dropdown or a CLI ``--preset`` flag) and for asserting
 #: the library surface in tests.
-PRESETS: Dict[str, Callable[[], ComponentConfig]] = {
+PRESETS: Dict[str, PresetFactory] = {
     "aws_alb": aws_alb,
     "aws_app_worker": aws_app_worker,
     "aws_elasticache": aws_elasticache,

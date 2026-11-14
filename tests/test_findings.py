@@ -318,7 +318,7 @@ def test_sorted_by_severity_stable_within_tier_capped_at_5() -> None:
         component_sizing=_sizing(
             worker={
                 "status": "undersized",
-                "mean_utilization": 0.95,  # crit: util_weak_link + warn: undersized
+                "mean_utilization": 0.95,  # crit: util_weak_link (which covers undersized)
                 "p95_utilization": 1.0,
                 "p95_queue": 2.0,
                 "recommended_capacity": 8,
@@ -330,23 +330,31 @@ def test_sorted_by_severity_stable_within_tier_capped_at_5() -> None:
                 "p95_queue": 0.0,
                 "recommended_capacity": 4,
             },
+            api={
+                "status": "undersized",
+                "mean_utilization": 0.60,
+                "p95_utilization": 0.7,
+                "p95_queue": 0.0,
+                "recommended_capacity": 3,
+            },
         ),
     )
     findings = build_findings(summary)
-    # 6 findings fire → capped at 5.
+    # 6 findings fire → capped at 5. The pinned worker is one crit, not a
+    # crit and a warn, so the last place goes to the db and the api is cut.
     assert len(findings) == 5
     assert [f["id"] for f in findings] == [
         "util_weak_link",  # crit, rule order
         "sla_breach",  # crit, rule order
         "retry_storm",  # warn, rule order
         "p95_headroom",  # warn, rule order
-        "undersized",  # warn, first undersized node (worker before db)
+        "undersized",  # warn, the db
     ]
     assert [f["severity"] for f in findings] == ["crit", "crit", "warn", "warn", "warn"]
     # Node findings keep their node; global ones omit it entirely.
     assert findings[0]["node"] == "worker"
     assert "node" not in findings[1]
-    assert findings[4]["node"] == "worker"
+    assert findings[4]["node"] == "db"
 
 
 # ---------------------------------------------------------------------------

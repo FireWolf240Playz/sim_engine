@@ -19,7 +19,14 @@ from sim_core.topology import Topology
 
 
 def _window(event: ChaosEvent) -> float:
-    """How long a single disruption stays active before it is restored."""
+    """How long a single disruption stays active before it is restored.
+
+    Every injector then rests for ``event.interval`` before it strikes again,
+    so an event repeats every ``duration + interval`` seconds: ``interval`` is
+    the calm between two disruptions, not the distance between their starts.
+    Without a ``duration`` the window is one interval long (as long down as
+    up).
+    """
     return event.duration if event.duration is not None else event.interval
 
 

@@ -9,18 +9,23 @@ simulation state (SimPy objects).
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 
 import numpy as np
 import simpy
 
 from sim_core.config import (
+    GROUP_SUM_TOLERANCE,
     CacheConfig,
     ComponentConfig,
     ComponentRole,
     Edge,
     GraphTopologyConfig,
 )
+
+#: Absorbs float error when a capacity drop lands exactly on half a slot.
+_TIE_EPSILON = 1e-9
 
 
 class Component:
@@ -85,9 +90,16 @@ class Component:
 
     @property
     def utilization(self) -> float:
-        """Fraction of capacity currently in use (clamped to 0.0-1.0)."""
+        """Fraction of capacity currently in use (clamped to 0.0-1.0).
+
+        A node with no live slots is saturated when anything holds or waits
+        for one, and idle otherwise. Reading it as 0% would make an outage
+        lower the node's mean utilisation, as if it had spare room.
+        """
         cap = self.capacity
-        return 0.0 if cap <= 0 else min(1.0, self.in_use / cap)
+        if cap <= 0:
+            return 1.0 if (self.in_use or self.queue_length) else 0.0
+        return min(1.0, self.in_use / cap)
 
     # -- live-state mutation (used by chaos) -------------------------------
     def set_capacity(self, new_capacity: int) -> int:
@@ -145,9 +157,18 @@ class Component:
         self._recompute_capacity()
 
     def _recompute_capacity(self) -> None:
+        """Live slots = configured slots minus the worst active removal.
+
+        ``intensity`` is the fraction of capacity removed, so the *removed*
+        count is what gets rounded, half up: a tie goes to the failure (half
+        of 3 slots leaves 1, half of a single slot leaves none). The small
+        epsilon keeps a product like ``10 * 0.15`` from landing just under
+        its tie.
+        """
         base = self.config.max_capacity
         worst = max(self._active_capacity_drops) if self._active_capacity_drops else 0.0
-        self.set_capacity(max(0, round(base * (1.0 - worst))))
+        removed = math.floor(base * worst + 0.5 + _TIE_EPSILON)
+        self.set_capacity(max(0, base - removed))
 
     def apply_latency_spike(self, factor: float) -> None:
         """Register an active service-time inflation (factor >= 1) and recompute.
@@ -206,7 +227,7 @@ class Topology:
     with a clear error, so a request walk can never loop forever.
     """
 
-    __slots__ = ("env", "config", "entry_node", "_components", "_outgoing")
+    __slots__ = ("env", "config", "entry_node", "_components", "_outgoing", "_choices")
 
     def __init__(self, env: simpy.Environment, config: GraphTopologyConfig) -> None:
         self.env = env
@@ -214,9 +235,23 @@ class Topology:
         self._components: Dict[str, Component] = {
             node.name: Component(env, node) for node in config.nodes
         }
-        self._outgoing: Dict[str, List[Edge]] = {node.name: [] for node in config.nodes}
+        outgoing: Dict[str, List[Edge]] = {node.name: [] for node in config.nodes}
         for edge in config.edges:
-            self._outgoing[edge.source].append(edge)
+            outgoing[edge.source].append(edge)
+        # Tuples: the walk reads these on every hop of every request.
+        self._outgoing: dict[str, tuple[Edge, ...]] = {
+            name: tuple(edges) for name, edges in outgoing.items()
+        }
+        # (source, group) -> the group's edges with their cumulative
+        # probabilities, ready for one draw to pick among them.
+        self._choices: dict[tuple[str, str], tuple[tuple[Edge, ...], tuple[float, ...]]] = {}
+        for name, edges in self._outgoing.items():
+            for group in dict.fromkeys(e.group for e in edges if e.group is not None):
+                members = tuple(e for e in edges if e.group == group)
+                bounds = list(np.cumsum([e.probability for e in members]))
+                if abs(bounds[-1] - 1.0) <= GROUP_SUM_TOLERANCE:
+                    bounds[-1] = 1.0  # an even split written to a few decimals
+                self._choices[(name, group)] = (members, tuple(float(b) for b in bounds))
         self.entry_node = config.resolve_entry_node()
         self._validate_acyclic()
 
@@ -262,9 +297,22 @@ class Topology:
                 f"unknown component {name!r} (known: {sorted(self._components)})"
             ) from None
 
-    def outgoing_edges(self, name: str) -> List[Edge]:
+    def outgoing_edges(self, name: str) -> tuple[Edge, ...]:
         """All outgoing edges from ``name``, in configured order (empty if terminal)."""
-        return list(self._outgoing.get(name, []))
+        return self._outgoing.get(name, ())
+
+    def choose(self, source: str, group: str, draw: float) -> Edge | None:
+        """The one edge of ``group`` out of ``source`` that ``draw`` selects.
+
+        ``draw`` is uniform on [0, 1). Each edge owns a slice of that range
+        as wide as its probability; a draw past the last slice (a group that
+        sums to less than 1) selects no edge.
+        """
+        members, bounds = self._choices[(source, group)]
+        for edge, bound in zip(members, bounds, strict=True):
+            if draw < bound:
+                return edge
+        return None
 
     # -- compatibility views -----------------------------------------------
     @property

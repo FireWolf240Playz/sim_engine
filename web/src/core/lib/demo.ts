@@ -12,15 +12,15 @@ import type { ComponentRole, SimulationConfig } from "../types";
  * the CLEAN run reads healthy-but-tense (97/100, db right-sized at ~66%
  * mean utilization) while every incident visibly degrades it:
  *
- *   db_failover                 97 → 94   (db loses all slots 5 s, half 30 s)
+ *   db_failover                 97 → 73   (db loses all slots 5 s, half 30 s)
  *   cross_region_latency_spike  97 → 86   (every hop ~80% slower, 15 s)
  *   cache_eviction_storm        97 → 59   (hit-rate −90%, 20 s, DB absorbs)
  *   dependency_timeout_cascade  97 → 57   (pricing_api down 10 s + tail)
  *
- * Scores re-measured 2026-11-14, after the engine began counting requests
- * overdue at the horizon as failures and serving a restored node's queue at
- * once (the search had landed on 98 / 81 / 87 / 71 / 50). db_failover is
- * now a mild incident on these numbers; the topology itself is unchanged.
+ * Scores re-measured 2026-11-14 after the engine review fixes (the search
+ * had landed on 98 / 81 / 87 / 71 / 50): requests overdue at the horizon
+ * count as failures, a restored node serves its queue at once, and "half" of
+ * the db's 3 slots now leaves 1, not 2. The topology itself is unchanged.
  *
  * Changing any of these invalidates that calibration — re-run the engine
  * before locking new numbers.

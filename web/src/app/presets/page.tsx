@@ -69,7 +69,10 @@ export default function PresetsPage() {
                           {p.hit_rate != null ? fmtPct(p.hit_rate, 0) : "—"}
                         </td>
                         <td className="py-2.5 font-mono text-sm text-ink">
-                          {p.cost_per_hour != null ? `$${p.cost_per_hour.toFixed(3)}` : "—"}
+                          {/* cost_per_hour is per slot; the row shows the whole instance */}
+                          {p.cost_per_hour != null
+                            ? `$${(p.cost_per_hour * p.max_capacity).toFixed(3)}`
+                            : "—"}
                         </td>
                       </tr>
                     ))}

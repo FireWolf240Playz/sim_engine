@@ -35,6 +35,12 @@ export interface TopologyEdge {
   source: string;
   target: string;
   probability?: number;
+  /**
+   * Edges out of one node with the same group are alternatives: a request
+   * takes at most one of them (a load balancer picking a backend). Without
+   * a group the edge is followed independently.
+   */
+  group?: string | null;
 }
 
 export type ChaosEventType =
@@ -130,6 +136,10 @@ export interface ComponentSizing {
   p95_utilization: number;
   p95_queue: number;
   recommended_capacity: number;
+  /** Counted, not sampled: slot acquisitions that had to queue, and the most
+   * slots held after a grant that did not. Optional: older payloads lack them. */
+  waited_requests?: number;
+  peak_in_use?: number;
   /** Verified answer (1.3h): what "Fix it" will actually do to this node.
    * Absent on `suggest=False` runs. */
   verified_status?: SizingStatus;

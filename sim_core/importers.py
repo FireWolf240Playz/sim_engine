@@ -404,13 +404,17 @@ def _unique_name(used: set[str], base: str) -> str:
     return f"{base}-{i}"
 
 
+#: Edge group for a load balancer's edges to its workers (one is picked).
+_WORKER_POOL = "workers"
+
+
 def _build_edges(
     nodes: List[ComponentConfig], assumptions: List[str]
 ) -> List[Edge]:
     """Infer a connected request-flow graph for TF-imported nodes.
 
     Heuristic (documented in the module docstring): entry (LB, else first
-    worker) → each worker (split evenly) → each cache (p=1.0) → each
+    worker) → one worker per request (split evenly) → each cache (p=1.0) → each
     database (p=1.0, the cache's miss path). Generic hops (queues, topics,
     object storage) get p=0.5 from every upstream hop, since TF carries no
     call-graph data and we only know "some" traffic touches them.
@@ -450,11 +454,16 @@ def _build_edges(
     edges = []
     for source in upstream:
         if workers and source not in workers:
-            # entry fans out to the worker pool, split evenly
+            # A load balancer picks one worker per request: the edges to the
+            # pool are alternatives (one group), split evenly. Everything
+            # behind the pool is reached through the worker that was picked,
+            # so the balancer gets no edge of its own to the cache, the
+            # database or the generic hops.
             share = 1.0 / len(workers)
             for worker in workers:
                 edges.append(Edge(source=source.name, target=worker.name,
-                                  probability=round(share, 4)))
+                                  probability=round(share, 4), group=_WORKER_POOL))
+            continue
         for cache in caches:
             edges.append(Edge(source=source.name, target=cache.name, probability=1.0))
         if not caches:
@@ -487,6 +496,11 @@ def _build_edges(
         assumptions.append(
             f"no load balancer found — {entry.name!r} is the entry and fans out "
             "to the other workers (inferred)"
+        )
+    if lbs and len(workers) > 1:
+        assumptions.append(
+            f"each load balancer sends a request to exactly one of the {len(workers)} "
+            "workers, split evenly — Terraform carries no routing weights (inferred)"
         )
     if generics:
         assumptions.append(

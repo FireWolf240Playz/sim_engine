@@ -30,17 +30,29 @@ distinct sizing is simulated once per plan. Every size is verified
 the last accepted run, which is also what :class:`FixOutcome` reports (score
 and findings before → after), so the UI can show what applying will do.
 
-Deterministic (pinned seed: ``config.seed``, else 42). A run is a few ms, so
-the whole search is typically well under half a second.
+Deterministic (pinned seed: ``config.seed``, else 42).
+
+Cost, measured: the 5-node demo plans in about 0.1 s (15-33 verification
+runs, clean run and incidents); the 19-node example topologies take 12-16 s
+(170-250 runs), because each pass searches every flagged node again on the
+sizes the pass before it settled. Three things keep it from being worse, and
+none of them changes a result:
+
+- the run being explained is the plan's "before", never simulated twice;
+- a node nobody waited for is not tried for a raise, since more slots would
+  replay the same events (``waited_requests`` is counted, not sampled);
+- a cut is not simulated above the node's peak slots in use, for the same
+  reason (see :func:`_replays_from` for the two exceptions).
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Any, TypedDict
 
-from sim_core.config import SimulationConfig
-from sim_core.suggestions import Suggestion, build_suggestions
+from sim_core.config import ChaosEventType, SimulationConfig
+from sim_core.suggestions import TARGET_UTILIZATION, Suggestion, build_suggestions
 
 #: How many resilience points a cut may cost and still count as free. Same
 #: seed, but a different capacity reorders events, so tiny jitter is noise.
@@ -233,28 +245,36 @@ def plan_fix(
     config: SimulationConfig,
     summary: Summary,
     *,
-    simulate: Simulate = _simulate,
+    simulate: Simulate | None = None,
 ) -> FixPlan:
     """Simulation-verified capacity changes for ``config`` and their outcome.
 
-    ``summary`` is the run being explained; it is used only to skip work
-    when nothing is flagged. ``simulate`` is injectable for tests.
+    ``summary`` is the run being explained. When ``config`` carries a seed
+    it must be that config's own run on that seed (it is, from
+    :meth:`sim_core.engine.CloudSimulator.run`), and it serves as the plan's
+    "before" instead of being simulated again. Without a seed the plan pins
+    :data:`DEFAULT_SEED` and simulates its own "before". ``simulate`` is
+    injectable for tests.
     """
     nodes = [n.model_dump(mode="json") for n in config.topology.nodes]
     if not build_suggestions(nodes, summary) and not _serious(summary):
         return FixPlan(suggestions=[], outcome=None)
 
+    # Looked up at call time, so a test can replace the module's ``_simulate``.
+    simulate_once: Simulate = simulate or _simulate
     seen: dict[tuple[int, ...], Summary] = {}
 
     def run(candidate: SimulationConfig) -> Summary:
         """One run per distinct sizing: within a plan only capacities vary."""
         key = tuple(n.max_capacity for n in candidate.topology.nodes)
         if key not in seen:
-            seen[key] = simulate(candidate)
+            seen[key] = simulate_once(candidate)
         return seen[key]
 
     seed = config.seed if config.seed is not None else DEFAULT_SEED
     working = config.model_copy(update={"seed": seed})
+    if config.seed is not None:
+        seen[tuple(n.max_capacity for n in working.topology.nodes)] = summary
     before = run(working)
     reference = before
     resolved_by: dict[str, list[str]] = {}
@@ -265,6 +285,8 @@ def plan_fix(
             break
         best: tuple[tuple[int, int, float], str, int, Summary] | None = None
         for n in working.topology.nodes:
+            if _waited(reference, n.name) == 0:
+                continue  # nobody waited for it: more slots replay the same run
             current = n.max_capacity
             doubled = max(current + 1, current * 2)
             trial = run(_with_capacity(working, n.name, doubled))
@@ -299,13 +321,8 @@ def plan_fix(
             if candidate["proposed"] > current:
                 proposed = _raise_undersized(search, current, reference)
             else:
-                proposed = _smallest(
-                    1,
-                    current,
-                    lambda c, s=search, r=reference, n=node, a=anchor: _cut_is_free(
-                        s.at(c), r, n, a
-                    ),
-                )
+                replays_from = _replays_from(config, reference, node, current)
+                proposed = _smallest_free_cut(search, reference, anchor, current, replays_from)
             if proposed is None or proposed == current:
                 continue
             reference = search.at(proposed)
@@ -343,6 +360,54 @@ def plan_fix(
         monthly_delta=sum(deltas) if priced and suggestions else None,
     )
     return FixPlan(suggestions=suggestions, outcome=outcome)
+
+
+def _waited(summary: Summary, node: str) -> int | None:
+    """Slot acquisitions on ``node`` that had to queue; ``None`` if unknown."""
+    info = (summary.get("component_sizing") or {}).get(node)
+    waited = info.get("waited_requests") if isinstance(info, dict) else None
+    return waited if isinstance(waited, int) else None
+
+
+def _replays_from(config: SimulationConfig, reference: Summary, node: str, current: int) -> int:
+    """Smallest size of ``node`` known, without simulating, to be a free cut.
+
+    If nobody waited for the node, every size from its peak slots in use
+    upward replays the reference run event for event: same score, same
+    findings. Two things can still differ, and both are ruled out here. A
+    capacity failure scales with the configured size, so a node chaos can
+    take slots from is never shortcut. And the node's own utilisation rises
+    as it shrinks, so the size must also keep it at or under the target.
+    Returns ``current`` when nothing is known: no shortcut.
+    """
+    info = (reference.get("component_sizing") or {}).get(node)
+    if not isinstance(info, dict) or _waited(reference, node) != 0:
+        return current
+    for event in config.chaos:
+        if event.event_type is ChaosEventType.COMPONENT_FAILURE and event.target in (None, node):
+            return current
+    peak, mean_util = info.get("peak_in_use"), info.get("mean_utilization")
+    if not isinstance(peak, int) or not isinstance(mean_util, (int, float)):
+        return current
+    in_target = math.ceil(mean_util * current / TARGET_UTILIZATION)
+    return min(current, max(1, peak, in_target))
+
+
+def _smallest_free_cut(
+    search: _Search, reference: Summary, anchor: float, current: int, replays_from: int
+) -> int:
+    """Smallest size of the searched node that is still a free cut."""
+    node = search.node
+
+    def free(capacity: int) -> bool:
+        return _cut_is_free(search.at(capacity), reference, node, anchor)
+
+    if replays_from < current:
+        proposed = _smallest(1, current, lambda c: c >= replays_from or free(c))
+        if free(proposed):
+            return proposed
+        # The replay argument did not hold for this run: search every size.
+    return _smallest(1, current, free)
 
 
 def _raise_undersized(search: _Search, current: int, reference: Summary) -> int | None:
@@ -419,7 +484,7 @@ def right_size(
     config: SimulationConfig,
     summary: Summary,
     *,
-    simulate: Simulate = _simulate,
+    simulate: Simulate | None = None,
 ) -> list[Suggestion]:
     """Just the suggestion list of :func:`plan_fix`."""
     return plan_fix(config, summary, simulate=simulate)["suggestions"]

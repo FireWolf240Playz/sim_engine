@@ -10,10 +10,27 @@ SimPy resources are created separately from these values inside
 from __future__ import annotations
 
 import json
+import math
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+#: Every config model is immutable and rejects fields it does not know. A
+#: misspelt key (``hit_rte``) would otherwise be dropped in silence and the
+#: default used in its place, which reads as a working config.
+_STRICT = ConfigDict(frozen=True, extra="forbid")
+
+#: Most requests one run may be expected to generate. A run records every
+#: request, so this bounds its memory and time; it is far above any run the
+#: tool is meant for and exists to stop a profile that explodes (exponential
+#: growth left at its default doubling period over a long run).
+MAX_EXPECTED_REQUESTS: int = 1_000_000
+
+#: Slack when the probabilities of a group of alternative edges are summed:
+#: an even split written to four decimals (three edges at 0.3333) still
+#: counts as covering every request.
+GROUP_SUM_TOLERANCE: float = 1e-3
 
 
 class PatternType(str, Enum):
@@ -62,7 +79,7 @@ class ComponentRole(str, Enum):
 class ComponentConfig(BaseModel):
     """Configuration shared by every infrastructure component."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     name: str = Field(..., min_length=1, description="Unique name within the topology.")
     role: ComponentRole = Field(
@@ -142,6 +159,16 @@ class CacheConfig(ComponentConfig):
 
     role: ComponentRole = ComponentRole.CACHE
 
+    @field_validator("role")
+    @classmethod
+    def _role_is_cache(cls, role: ComponentRole) -> ComponentRole:
+        if role is not ComponentRole.CACHE:
+            raise ValueError(
+                f"a CacheConfig always has role 'cache', got {role.value!r}; use the "
+                "config class of that role, which has no hit_rate"
+            )
+        return role
+
 
 class DatabaseConfig(ComponentConfig):
     """Primary data store (e.g. Postgres)."""
@@ -155,7 +182,7 @@ class TopologyConfig(BaseModel):
     Exactly one of each required role; the cache is optional.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     load_balancer: LoadBalancerConfig
     app_worker: AppWorkerConfig
@@ -202,9 +229,15 @@ class Edge(BaseModel):
     *independently*, so a node with several outgoing edges fans out to several
     downstream components (e.g. a worker calling two services), each visited
     with its own probability.
+
+    Edges out of one node that share a ``group`` are *alternatives* instead:
+    each request takes at most one of them, chosen by their probabilities.
+    That is how a load balancer picks one backend. The probabilities of a
+    group may sum to less than 1, in which case the remainder of the requests
+    takes none of its edges.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     source: str = Field(..., min_length=1, description="Name of the source node.")
     target: str = Field(..., min_length=1, description="Name of the target node.")
@@ -213,6 +246,15 @@ class Edge(BaseModel):
         ge=0.0,
         le=1.0,
         description="Probability (0-1) that a request at the source follows this edge.",
+    )
+    group: str | None = Field(
+        None,
+        min_length=1,
+        description=(
+            "Edges out of the same node with the same group are alternatives: "
+            "a request takes at most one, picked by probability. None "
+            "(default) means the edge is followed independently."
+        ),
     )
 
 
@@ -250,7 +292,7 @@ class GraphTopologyConfig(BaseModel):
     :class:`SimulationConfig`, so old configs keep working unchanged.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     nodes: List[TopologyNode] = Field(
         ...,
@@ -272,8 +314,15 @@ class GraphTopologyConfig(BaseModel):
 
         A dict with ``role: worker`` validates identically against
         ``LoadBalancerConfig``, ``AppWorkerConfig`` and ``ComponentConfig``, so
-        the concrete type is resolved explicitly: by ``hit_rate`` presence for
-        caches, by ``role`` otherwise. Model instances pass through untouched.
+        the concrete type is resolved explicitly, by ``role``. A ``hit_rate``
+        belongs to a cache: with no role it means one (older configs wrote
+        caches that way), with any other role it is an error, because a
+        worker that silently became a cache would stop most of its traffic.
+        A null ``hit_rate`` is treated as absent.
+
+        Model instances pass through, except a plain ``ComponentConfig``
+        carrying the cache role: it becomes a :class:`CacheConfig`, so it has
+        a real hit rate instead of behaving as a cache that always hits.
         """
         role_map: Dict[str, type] = {
             ComponentRole.LOAD_BALANCER: LoadBalancerConfig,
@@ -285,13 +334,28 @@ class GraphTopologyConfig(BaseModel):
         for node in nodes:
             if isinstance(node, dict):
                 data = dict(node)
+                if data.get("hit_rate", 0.0) is None:
+                    del data["hit_rate"]
+                role = data.get("role")
+                if "hit_rate" in data and role is not None and role != ComponentRole.CACHE:
+                    raise ValueError(
+                        f"node {data.get('name')!r}: hit_rate is only valid on a cache "
+                        f"node, but its role is {getattr(role, 'value', role)!r}. Remove "
+                        "hit_rate, or set role: cache"
+                    )
                 if "hit_rate" in data:
                     resolved.append(CacheConfig.model_validate(data))
-                elif "role" in data and data["role"] in role_map:
-                    resolved.append(role_map[data["role"]].model_validate(data))
+                elif role in role_map:
+                    resolved.append(role_map[role].model_validate(data))
                 else:
                     # generic / external_api / unknown roles: plain component
                     resolved.append(ComponentConfig.model_validate(data))
+            elif (
+                isinstance(node, ComponentConfig)
+                and node.role is ComponentRole.CACHE
+                and not isinstance(node, CacheConfig)
+            ):
+                resolved.append(CacheConfig.model_validate(node.model_dump()))
             else:
                 resolved.append(node)
         return resolved
@@ -331,6 +395,23 @@ class GraphTopologyConfig(BaseModel):
                 raise ValueError(f"self-loop edge on node {edge.source!r} is not allowed")
         if self.entry_node is not None and self.entry_node not in names:
             raise ValueError(f"entry_node {self.entry_node!r} is not one of the configured nodes")
+        return self
+
+    @model_validator(mode="after")
+    def _grouped_edges_are_alternatives(self) -> GraphTopologyConfig:
+        """A group picks at most one edge, so its probabilities cannot pass 1."""
+        totals: dict[tuple[str, str], float] = {}
+        for edge in self.edges:
+            if edge.group is not None:
+                key = (edge.source, edge.group)
+                totals[key] = totals.get(key, 0.0) + edge.probability
+        for (source, group), total in totals.items():
+            if total > 1.0 + GROUP_SUM_TOLERANCE:
+                raise ValueError(
+                    f"edges out of {source!r} in group {group!r} have probabilities "
+                    f"that sum to {total:g}: alternatives can sum to at most 1. Lower "
+                    "them, or drop the group if the node calls every target"
+                )
         return self
 
     @model_validator(mode="after")
@@ -415,7 +496,7 @@ class TrafficPattern(BaseModel):
     inter-arrival times) rather than fixed spacing.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     base_rps: float = Field(..., gt=0.0, description="Sustained arrival rate in requests/second.")
     duration: float = Field(..., gt=0.0, description="How long traffic is generated, in seconds.")
@@ -431,6 +512,84 @@ class TrafficPattern(BaseModel):
     spike_rps: Optional[float] = Field(None, gt=0.0, description="Arrival rate during the spike window.")
     spike_start: Optional[float] = Field(None, ge=0.0, description="When the spike window begins.")
     spike_duration: Optional[float] = Field(None, gt=0.0, description="Length of the spike window.")
+
+    @model_validator(mode="after")
+    def _spike_is_whole_and_inside_the_window(self) -> TrafficPattern:
+        """A spike needs all three fields, and must overlap the traffic window."""
+        given = [
+            name
+            for name in ("spike_rps", "spike_start", "spike_duration")
+            if getattr(self, name) is not None
+        ]
+        if not given:
+            return self
+        if len(given) < 3:
+            raise ValueError(
+                "a spike needs spike_rps, spike_start and spike_duration together; "
+                f"only {', '.join(given)} was set, which would be ignored"
+            )
+        assert self.spike_start is not None and self.spike_duration is not None
+        window_end = self.start_time + self.duration
+        spike_end = self.spike_start + self.spike_duration
+        if self.spike_start >= window_end or spike_end <= self.start_time:
+            raise ValueError(
+                f"the spike window ({self.spike_start:g} s to {spike_end:g} s) never "
+                f"opens: traffic runs from {self.start_time:g} s to {window_end:g} s. "
+                "Times are absolute, "
+                "measured from the start of the run"
+            )
+        return self
+
+    # -- what the profile adds up to (pure; used for validation and limits) --
+    def _base_requests(self, a: float, b: float) -> float:
+        """Requests the base curve (no spike) generates between ``a`` and ``b``."""
+        if b <= a:
+            return 0.0
+        if self.pattern_type is PatternType.EXPONENTIAL:
+            tau = self.growth_period
+            growth = _pow2((b - self.start_time) / tau) - _pow2((a - self.start_time) / tau)
+            return self.base_rps * tau / math.log(2.0) * growth
+        return self.base_rps * (b - a)
+
+    def _spike_overlap(self, lo: float, hi: float) -> tuple[float, float]:
+        """The part of ``[lo, hi]`` the spike covers (empty when ``b <= a``)."""
+        if self.spike_rps is None or self.spike_start is None or self.spike_duration is None:
+            return (0.0, 0.0)
+        return (max(lo, self.spike_start), min(hi, self.spike_start + self.spike_duration))
+
+    def expected_requests(self, horizon: float) -> float:
+        """Mean number of requests generated before ``horizon`` seconds.
+
+        The integral of the rate over the traffic window, cut off at the
+        horizon (the run's duration): the base curve, with the spike rate in
+        place of it while the spike is active.
+        """
+        lo, hi = self.start_time, min(self.start_time + self.duration, horizon)
+        if hi <= lo:
+            return 0.0
+        total = self._base_requests(lo, hi)
+        a, b = self._spike_overlap(lo, hi)
+        if b > a and self.spike_rps is not None:
+            total += self.spike_rps * (b - a) - self._base_requests(a, b)
+        return total
+
+    def peak_rps(self, horizon: float) -> float:
+        """Highest arrival rate reached before ``horizon`` seconds."""
+        lo, hi = self.start_time, min(self.start_time + self.duration, horizon)
+        if hi <= lo:
+            return 0.0
+        peak = self.base_rps
+        if self.pattern_type is PatternType.EXPONENTIAL:
+            peak *= _pow2((hi - lo) / self.growth_period)
+        a, b = self._spike_overlap(lo, hi)
+        if b > a and self.spike_rps is not None:
+            peak = max(peak, self.spike_rps)
+        return peak
+
+
+def _pow2(exponent: float) -> float:
+    """``2 ** exponent``, as infinity where a float would overflow."""
+    return math.inf if exponent > 1000.0 else float(2.0**exponent)
 
 
 class ChaosEvent(BaseModel):
@@ -454,16 +613,23 @@ class ChaosEvent(BaseModel):
     the database node of whatever topology they are applied to.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     event_type: ChaosEventType
     intensity: float = Field(0.5, ge=0.0, le=1.0)
     start_time: float = Field(0.0, ge=0.0, description="When the first injection happens.")
-    interval: float = Field(60.0, gt=0.0, description="Seconds between injections.")
+    interval: float = Field(
+        60.0,
+        gt=0.0,
+        description=(
+            "Seconds of calm after one disruption ends before the next begins. "
+            "The event repeats every duration + interval seconds."
+        ),
+    )
     duration: Optional[float] = Field(
         None,
         gt=0.0,
-        description="How long each disruption lasts. Defaults to the gap between injections.",
+        description="How long each disruption lasts. Defaults to interval (as long down as up).",
     )
     target: Optional[str] = Field(
         None,
@@ -478,7 +644,7 @@ class ChaosEvent(BaseModel):
 class SimulationConfig(BaseModel):
     """Top-level, fully-validated simulation specification."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = _STRICT
 
     seed: Optional[int] = Field(None, description="RNG seed for reproducibility.")
     duration: float = Field(100.0, gt=0.0, description="Total simulation length in seconds.")
@@ -531,6 +697,32 @@ class SimulationConfig(BaseModel):
                     f"cache_outage targets {event.target!r}, which is not a cache "
                     f"(cache nodes: {sorted(caches)})"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _traffic_fits_the_run(self) -> SimulationConfig:
+        """Fail fast on a profile that sends nothing, or far too much."""
+        traffic = self.traffic
+        if traffic.start_time >= self.duration:
+            raise ValueError(
+                f"traffic starts at {traffic.start_time:g} s but the run ends at "
+                f"{self.duration:g} s: no request would ever arrive. Lower "
+                "traffic.start_time or raise duration"
+            )
+        expected = traffic.expected_requests(self.duration)
+        if expected > MAX_EXPECTED_REQUESTS:
+            peak = traffic.peak_rps(self.duration)
+            growth = (
+                f", or lengthen growth_period (the rate doubles every "
+                f"{traffic.growth_period:g} s)"
+                if traffic.pattern_type is PatternType.EXPONENTIAL
+                else ""
+            )
+            raise ValueError(
+                f"this traffic profile would generate about {expected:,.0f} requests, "
+                f"peaking at {peak:,.0f} rps; the limit for one run is "
+                f"{MAX_EXPECTED_REQUESTS:,}. Shorten the run or lower base_rps{growth}"
+            )
         return self
 
     # -- file I/O: YAML / JSON ----------------------------------------------
