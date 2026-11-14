@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -24,6 +25,22 @@ from .constants import _MAX_CACHE_ENTRIES, _USER_AGENT, SUPPORTED_CURRENCY
 
 class PriceLookupError(RuntimeError):
     """A price could not be resolved (bad SKU/service, empty result, network down)."""
+
+
+#: Query parameters that carry a credential (GCP sends its API key as
+#: ``?key=...``). Their values never reach an error message.
+_SECRET_QUERY_PARAM = re.compile(r"([?&](?:key|api_key|apikey|token|access_token)=)[^&#]*", re.I)
+
+
+def redact_url(url: str) -> str:
+    """``url`` with credential query values masked, safe to print or log.
+
+    Error messages quote the URL that failed, and they end up on stderr, in
+    CI logs and in screenshots. A 403 is the usual first-run GCP error
+    (Cloud Billing API not enabled), so the key would leak exactly when a new
+    user is most likely to paste the message somewhere.
+    """
+    return _SECRET_QUERY_PARAM.sub(r"\1***", url)
 
 
 class ResolvedPrice(BaseModel):
@@ -99,7 +116,7 @@ class CatalogBase:
                 pass
             detail = f" (API says: {body})" if body else ""
             raise PriceLookupError(
-                f"the pricing API returned HTTP {exc.code} for {url}{detail}"
+                f"the pricing API returned HTTP {exc.code} for {redact_url(url)}{detail}"
             ) from exc
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             raise PriceLookupError(f"network request to the pricing API failed: {exc}") from exc
@@ -109,7 +126,9 @@ class CatalogBase:
         try:
             data = json.loads(self._http_get_bytes(url))
         except json.JSONDecodeError as exc:
-            raise PriceLookupError(f"expected JSON from the pricing API at {url!r}") from exc
+            raise PriceLookupError(
+                f"expected JSON from the pricing API at {redact_url(url)!r}"
+            ) from exc
         if not isinstance(data, dict):
             raise PriceLookupError(f"unexpected payload shape from the pricing API: {type(data)!r}")
         return data
