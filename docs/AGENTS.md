@@ -126,7 +126,9 @@ the API validates by exactly the same rules as the CLI.
 - `src/core/types.ts` — hand-written mirror of the API contract. **Changing
   `summary()` means changing this file.**
 - `src/core/api/client.ts` — the only place `fetch` is called. Typed
-  `ApiError`, per-call timeouts.
+  `ApiError`, per-call timeouts. `request` reads JSON; `download` reads a
+  file as a blob (`api.exportRun`). Both go through `send` and `refusal`,
+  so a failure reads the same from either.
 - `src/core/state/RunStateContext.tsx` — the shared run: active config,
   selected playbook, result. **The engine call lives here exactly once;** no
   view owns a fetch. Runs carry a token so a stale response cannot overwrite a
@@ -150,7 +152,9 @@ the API validates by exactly the same rules as the CLI.
   plain-text copy, including the change log), `NodeInspector` (1.4: the
   node dialog — its config, the verified measurement at the current size,
   cost, the findings that name it, and its pending Fix-it change; opens
-  from a topology node's `onOpen`). The verdict's bar, icon, band
+  from a topology node's `onOpen`), `ExportMenu` (2.1c: one button per
+  export format, downloads the run on screen; a paid format wears a "Pro"
+  badge and is not locked). The verdict's bar, icon, band
   word and gauge share one colour, `format.ts::verdictSeverity` (the worse of
   score and worst finding).
 - `src/core/lib/` — **helpers only, no tests here.** `format.ts` (severity maps
@@ -167,18 +171,22 @@ the API validates by exactly the same rules as the CLI.
   old one, so plain `memo` skips), `nodeInspector.ts` (`inspectNode`: one
   node's inspection — config, verified label + peaks, monthly cost, findings,
   pending fix; pure, no React), `verdictView.ts` (`findingKeys`: stable
-  id+node keys for the finding cards), `chaos.ts`,
+  id+node keys for the finding cards), `exports.ts` (2.1c: `exportRequest`
+  names the measured run and, in 5-seed mode, its typical seed;
+  `exportFilename`, `filenameFromDisposition`, `exportChoices`), `chaos.ts`,
   `useThemeTokens.ts`, `useReducedMotion.ts`, `themeStorage.ts`, `demo.ts`
   (the calibrated demo topology — changing its numbers invalidates the
   documented scores).
-- `src/core/state/RunStateContext.tsx` also owns `applyAndRerun(suggestions)`:
+- `src/core/state/RunStateContext.tsx` exposes `measuredRun` (the config and
+  incident the result on screen was simulated with; an export sends this,
+  never the controls). It also owns `applyAndRerun(suggestions)`:
   patches the active config and runs it through the same token-guarded path,
   and `fixHistory` (only an apply's own re-run completes its record; a new or
   reset architecture starts a new log).
 - Re-runs patch in place: results stay mounted and dim while a run is in
   flight (`.eleven-results[aria-busy]`), the gauge glides old → new, and the
   timeline draws in only for its first data.
-- `tests/` — Vitest unit tests (8 files), one file per module,
+- `tests/` — Vitest unit tests (17 files, 179 tests), one file per module,
   `npm run test:unit`.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
 
@@ -208,9 +216,9 @@ read by `test_suggestions.py`: run the web tests first or that test skips.
 **Where we are:** Wave 1. 1.1 (multi-seed confidence), 1.2 (findings +
 rich verdict card), 1.3 (verified "Fix it" + change log), 1.3e–1.3g
 (render streamlining), 1.3h (verified sizing labels) and 1.4 (node
-inspector) shipped: Wave 1 is done. Wave 2: 2.1 export center has its
-engine (2.1) and its API + CLI (2.1b); the download menu in the web UI
-(2.1c) is next. Waves 3–6 untouched.
+inspector) shipped: Wave 1 is done. Wave 2: 2.1 export center is built
+(engine 2.1, API + CLI 2.1b, web menu 2.1c); the menu still needs its
+check in the browser. Next: 2.2 paid gating. Waves 3–6 untouched.
 
 ## `.agents/` — how the agents coordinate
 
