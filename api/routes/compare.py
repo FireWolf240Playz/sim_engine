@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import ValidationError
 
+from api.limits import check_budget
 from api.schemas import CompareRequest, CompareResponse
 from sim_core.compare import (
     PROVIDERS,
@@ -63,6 +64,14 @@ def compare_runs(payload: CompareRequest) -> dict[str, Any]:
     - A bad path/value → 400 (path) or 422 (rejected value).
     """
     config = payload.config
+
+    # Every variant is a full run next to the baseline: bound the total first.
+    variants_asked = {
+        "multi-cloud": len(PROVIDERS),
+        "what-if": len(payload.set or []),
+        "sweep": len(payload.values or []),
+    }[payload.mode]
+    check_budget(config, runs=1 + variants_asked)
 
     if payload.mode == "multi-cloud":
         pairs: list[tuple[str, Any]] = [("baseline", config)]

@@ -22,6 +22,7 @@ from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
 
+from api.limits import check_budget
 from api.schemas import SimulateRequest, SimulateResponse
 from sim_core import CloudSimulator, resilience_profile, typical_index
 from sim_core.playbooks import get_playbook
@@ -64,6 +65,7 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
             ) from exc
 
     seed_list = _resolve_seed_list(payload, config.seed)
+    check_budget(config, runs=len(seed_list) if seed_list is not None else 1)
     if seed_list is None:
         return _single_run_response(config, payload.include_report_png, payload.include_timeseries)
 

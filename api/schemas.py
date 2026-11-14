@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from api.limits import MAX_SWEEP_VALUES, MAX_WHAT_IF_VARIANTS
 from sim_core import SimulationConfig
 
 
@@ -101,9 +102,17 @@ class CompareRequest(BaseModel):
 
     config: SimulationConfig
     mode: Literal["multi-cloud", "what-if", "sweep"]
-    set: list[str] | None = Field(default=None, description="what-if: 'path=value' strings")
+    set: list[str] | None = Field(
+        default=None,
+        max_length=MAX_WHAT_IF_VARIANTS,
+        description="what-if: 'path=value' strings",
+    )
     param: str | None = Field(default=None, description="sweep: parameter path to sweep")
-    values: list[float] | None = Field(default=None, description="sweep: values to try")
+    values: list[float] | None = Field(
+        default=None,
+        max_length=MAX_SWEEP_VALUES,
+        description="sweep: values to try (each is a full run)",
+    )
     metric: str = Field(default="p95_latency", description="sweep: knee metric")
     threshold: float = Field(default=0.05, description="sweep: knee improvement fraction")
 

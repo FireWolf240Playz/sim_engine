@@ -15,6 +15,7 @@ Run from the repo root::
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import FastAPI
@@ -23,6 +24,27 @@ from fastapi.middleware.cors import CORSMiddleware
 import sim_core
 from api.routes import compare, imports_api, playbooks, presets, simulate
 from api.schemas import HealthResponse
+
+#: Environment variable naming the browser origins allowed to call the API,
+#: comma-separated (``https://eleven.example.com,https://staging.example.com``).
+CORS_ORIGINS_ENV = "ELEVEN_CORS_ORIGINS"
+
+#: Without that variable: a frontend served from this machine, on any port.
+_LOCAL_ORIGIN = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+
+def _cors_origins() -> dict[str, Any]:
+    """Which origins a browser may call from (read once, at app creation).
+
+    The API holds no credentials, so an open policy leaks nothing; what it
+    would allow is any page a user visits spending this machine's CPU on
+    simulations. The default therefore admits only a local frontend, and a
+    deployment names its own origins in :data:`CORS_ORIGINS_ENV`.
+    """
+    configured = [o.strip() for o in os.environ.get(CORS_ORIGINS_ENV, "").split(",") if o.strip()]
+    if configured:
+        return {"allow_origins": configured}
+    return {"allow_origin_regex": _LOCAL_ORIGIN}
 
 
 def create_app() -> FastAPI:
@@ -36,14 +58,11 @@ def create_app() -> FastAPI:
         ),
     )
 
-    # Permissive CORS for now — the Next.js frontend (Phase 5) will call
-    # this from a browser origin; tighten to the real frontend origin once
-    # it has one.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
+        **_cors_origins(),
     )
 
     app.include_router(simulate.router)
