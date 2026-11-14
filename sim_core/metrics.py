@@ -77,10 +77,59 @@ class MetricsCollector:
         #: :func:`sim_core.score.cost_extrapolation` for the steady-state
         #: hour/month/year projection in ``summary()``.
         self._run_duration: Optional[float] = None
+        #: Arrival time of every request that has arrived and not finished
+        #: yet, in arrival order. Whatever is left when the run stops is
+        #: settled by :meth:`settle_unfinished`, so no arrival goes missing.
+        self._open: dict[str, float] = {}
+        #: Requests still in the system at the horizon, and how many of them
+        #: were already past their budget (those are recorded as failed).
+        self.unfinished: int = 0
+        self.overdue: int = 0
 
     # -- recording ---------------------------------------------------------
+    def record_arrival(self, request_id: str, start: float) -> None:
+        """Note that a request entered the system at ``start``."""
+        self._open[request_id] = start
+
     def record_request(self, record: RequestRecord) -> None:
+        self._open.pop(record.request_id, None)
         self.requests.append(record)
+
+    def settle_unfinished(self, end_time: float) -> None:
+        """Account for the requests still in the system when the run stops.
+
+        A run that only counts finished requests rewards an outage: the
+        requests stuck behind a dead node never finish, so they never show up
+        as failures, and completion rate and latency improve the longer the
+        node stays down. Every unfinished request is therefore counted
+        (``unfinished``), and one that has already waited past its budget is
+        recorded as a failed, SLA-missing request whose latency is its age at
+        the horizon - a lower bound on the latency it would have had.
+
+        The budget is the SLA target. With no SLA target it is the latency of
+        the slowest request that did finish (zero when none did). A request
+        younger than the budget is merely in flight, as some always are when
+        a healthy run stops, and stays out of the record: its outcome is not
+        known and is not guessed.
+        """
+        self.unfinished = len(self._open)
+        budget = self._sla_target
+        if budget is None:
+            budget = max((r.latency for r in self.requests), default=0.0)
+        late = [(rid, start) for rid, start in self._open.items() if end_time - start > budget]
+        self._open.clear()
+        self.overdue = len(late)
+        for request_id, start in late:
+            self.requests.append(
+                RequestRecord(
+                    request_id=request_id,
+                    start=start,
+                    end=end_time,
+                    success=False,
+                    sla_met=False,
+                    cache_hit=None,
+                )
+            )
 
     def record_retry(self, component_name: str) -> None:
         """Count one timeout retry against *component_name*."""
@@ -208,7 +257,14 @@ class MetricsCollector:
             }
 
     def summary(self) -> Dict[str, Any]:
-        """Headline metrics over all completed requests.
+        """Headline metrics over every recorded request.
+
+        A recorded request is one that finished (completed or failed) or was
+        overdue at the horizon (:meth:`settle_unfinished`); overdue requests
+        count as failed. ``unfinished_requests`` is everything still in the
+        system when the run stopped and ``overdue_requests`` the part of it
+        that was recorded, so ``requests + unfinished_requests -
+        overdue_requests`` is the number of arrivals.
 
         Beyond the raw metrics, the summary carries the Phase 2 scoring
         block (see :mod:`sim_core.score` for the documented formulas):
@@ -270,6 +326,9 @@ class MetricsCollector:
                 "cost_breakdown_by_component": dict(self.cost_by_component),
                 "component_sizing": dict(self.sizing),
             }
+
+        result["unfinished_requests"] = self.unfinished
+        result["overdue_requests"] = self.overdue
 
         # -- Phase 2 scoring block (pure functions, deterministic) ---------
         result["sla_target"] = self._sla_target
@@ -357,7 +416,7 @@ class MetricsCollector:
         return ticks
 
     def requests_df(self) -> pd.DataFrame:
-        """One row per completed request, with per-component latency breakdowns."""
+        """One row per recorded request, with per-component latency breakdowns."""
         rows: List[Dict[str, Any]] = []
         for r in self.requests:
             row: Dict[str, Any] = {

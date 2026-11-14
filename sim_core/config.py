@@ -445,9 +445,11 @@ class ChaosEvent(BaseModel):
     * ``CACHE_OUTAGE``: fraction of the cache hit-rate removed
       (1.0 -> cache fully disabled, every lookup misses).
 
-    ``target`` (optional) names a specific component to victimise for
-    ``COMPONENT_FAILURE`` events; without it a random component is drawn, which
-    is the original behaviour and keeps old configs unchanged. Incident
+    ``target`` (optional) names a specific component to victimise. For
+    ``COMPONENT_FAILURE`` a random component is drawn without it, which is the
+    original behaviour and keeps old configs unchanged. For ``CACHE_OUTAGE`` it
+    must name a cache node; without it the first cache in node order is hit.
+    ``NETWORK_LATENCY`` slows every component and ignores it. Incident
     playbooks (:mod:`sim_core.playbooks`) use this to aim an incident at, e.g.,
     the database node of whatever topology they are applied to.
     """
@@ -466,9 +468,9 @@ class ChaosEvent(BaseModel):
     target: Optional[str] = Field(
         None,
         description=(
-            "Component name to fail (COMPONENT_FAILURE only). Must be a node "
-            "name in the topology. None (default) keeps the random-victim "
-            "behaviour."
+            "Component name to hit (COMPONENT_FAILURE: any node; CACHE_OUTAGE: "
+            "a cache node). Must be a node name in the topology. None "
+            "(default) keeps the random-victim / first-cache behaviour."
         ),
     )
 
@@ -508,13 +510,26 @@ class SimulationConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_chaos_targets(self) -> "SimulationConfig":
-        """Fail fast when a chaos event names a node the topology does not have."""
+        """Fail fast when a chaos event names a node the topology does not have,
+        or aims a cache outage at a node that is not a cache."""
         names = {node.name for node in self.topology.nodes}
+        caches = {
+            node.name
+            for node in self.topology.nodes
+            if node.role is ComponentRole.CACHE or isinstance(node, CacheConfig)
+        }
         for event in self.chaos:
-            if event.target is not None and event.target not in names:
+            if event.target is None:
+                continue
+            if event.target not in names:
                 raise ValueError(
                     f"chaos event targets unknown component {event.target!r} "
                     f"(known nodes: {sorted(names)})"
+                )
+            if event.event_type is ChaosEventType.CACHE_OUTAGE and event.target not in caches:
+                raise ValueError(
+                    f"cache_outage targets {event.target!r}, which is not a cache "
+                    f"(cache nodes: {sorted(caches)})"
                 )
         return self
 

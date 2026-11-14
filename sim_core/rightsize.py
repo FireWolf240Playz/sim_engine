@@ -18,11 +18,15 @@ pinned seed, in three phases on one working config:
 2. **Undersized.** Any node still flagged undersized gets the smallest
    capacity that clears the flag.
 3. **Trim.** Over-provisioned nodes are cut to the smallest size that adds
-   no crit/warn finding and costs at most :data:`SCORE_TOLERANCE` points in
-   total (anchored to the best score reached).
+   no crit/warn finding and costs at most :data:`SCORE_TOLERANCE` points
+   (anchored to the best score reached).
 
 Phases 2 and 3 repeat until a pass changes nothing, so one apply lands on the
-end state. Every size is verified *together*: the final config is exactly
+end state. When the passes settle below the best score reached, the anchor
+drops to the settled score and they run again: that is the measure a re-run
+of the applied config would use, so it has nothing further to offer. Each
+distinct sizing is simulated once per plan. Every size is verified
+*together*: the final config is exactly
 the last accepted run, which is also what :class:`FixOutcome` reports (score
 and findings before → after), so the UI can show what applying will do.
 
@@ -52,7 +56,7 @@ MAX_REPAIR_STEPS = 8
 RAISE_SEARCH_FACTOR = 16
 
 #: Undersized/trim passes before giving up on reaching a fixed point.
-MAX_PASSES = 3
+MAX_PASSES = 8
 
 #: Seed used for verification when the config has none.
 DEFAULT_SEED = 42
@@ -170,8 +174,9 @@ def _as_good(candidate: Summary, target: Summary) -> bool:
 
 
 def _cut_is_free(candidate: Summary, reference: Summary, node: str, anchor: float) -> bool:
-    """``anchor`` is the best score reached so far, so the tolerance bounds
-    the *total* cost of every cut, not each cut against the one before."""
+    """``anchor`` is the best score reached since the passes last settled, so
+    the tolerance bounds the cost of a run of cuts together, not each cut
+    against the one before."""
     return (
         _status(candidate, node) != "undersized"
         and _serious(candidate) <= _serious(reference)
@@ -239,9 +244,18 @@ def plan_fix(
     if not build_suggestions(nodes, summary) and not _serious(summary):
         return FixPlan(suggestions=[], outcome=None)
 
+    seen: dict[tuple[int, ...], Summary] = {}
+
+    def run(candidate: SimulationConfig) -> Summary:
+        """One run per distinct sizing: within a plan only capacities vary."""
+        key = tuple(n.max_capacity for n in candidate.topology.nodes)
+        if key not in seen:
+            seen[key] = simulate(candidate)
+        return seen[key]
+
     seed = config.seed if config.seed is not None else DEFAULT_SEED
     working = config.model_copy(update={"seed": seed})
-    before = simulate(working)
+    before = run(working)
     reference = before
     resolved_by: dict[str, list[str]] = {}
 
@@ -253,13 +267,13 @@ def plan_fix(
         for n in working.topology.nodes:
             current = n.max_capacity
             doubled = max(current + 1, current * 2)
-            trial = simulate(_with_capacity(working, n.name, doubled))
+            trial = run(_with_capacity(working, n.name, doubled))
             if _helps(trial, reference) and (best is None or _rank(trial) < best[0]):
                 best = (_rank(trial), n.name, doubled, trial)
         if best is None:
             break  # no capacity change helps: the cause is not capacity
         _, node, doubled, trial = best
-        search = _Search(working, reference, node, simulate)
+        search = _Search(working, reference, node, run)
         search.runs[doubled] = trial
         current = _capacity(working, node)
         proposed = _smallest(
@@ -281,7 +295,7 @@ def plan_fix(
         for candidate in flagged:  # raises first, then cuts, by name
             node = candidate["node"]
             current = _capacity(working, node)
-            search = _Search(working, reference, node, simulate)
+            search = _Search(working, reference, node, run)
             if candidate["proposed"] > current:
                 proposed = _raise_undersized(search, current, reference)
             else:
@@ -298,8 +312,14 @@ def plan_fix(
             working = _with_capacity(working, node, proposed)
             anchor = max(anchor, _score(reference))
             changed = True
-        if not changed:
+        if changed:
+            continue
+        if anchor <= _score(reference):
             break
+        # Settled, but below the best score reached. A re-run of the applied
+        # config measures cuts against its own score, so do the same here;
+        # otherwise that re-run would still have a cut to offer.
+        anchor = _score(reference)
 
     suggestions = _suggestions(config, working, summary, resolved_by, seed)
     if not suggestions and not _serious(before):

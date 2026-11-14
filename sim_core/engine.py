@@ -75,9 +75,13 @@ class CloudSimulator:
 
         If a component's slot cannot be acquired within its configured timeout
         (after all configured retries), or the request is interrupted
-        mid-flight, it is recorded as failed.
+        mid-flight, it is recorded as failed. A failed request never meets the
+        SLA, however quickly it failed: giving up fast is not a fast answer.
+        The arrival is noted first, so a request still in the system when the
+        run stops is settled by the collector instead of vanishing.
         """
         start = self.env.now
+        self.collector.record_arrival(request_id, start)
         component_times: Dict[str, float] = {}
         success = False
         # Single-element box so the (recursive) walk can report back the first
@@ -98,16 +102,15 @@ class CloudSimulator:
 
         end = self.env.now
         latency = end - start
-        sla_met = (
-            True if self.config.sla_target is None else latency <= self.config.sla_target
-        )
+        sla_target = self.config.sla_target
+        sla_met = success and (sla_target is None or latency <= sla_target)
         self.collector.record_request(
             RequestRecord(
                 request_id=request_id,
                 start=start,
                 end=end,
                 success=success,
-                sla_met=bool(sla_met),
+                sla_met=sla_met,
                 cache_hit=cache_hit[0],
                 component_times=component_times,
             )
@@ -132,11 +135,14 @@ class CloudSimulator:
 
         # Read-through cache semantics (live hit-rate, mutated by chaos):
         # a hit serves the response and ends this branch; a miss falls
-        # through to the downstream edges.
+        # through to the downstream edges. Every cache decides for itself,
+        # from its own hit-rate; the request's ``cache_hit`` is the first
+        # decision on its path.
         if node.is_cache:
+            hit = bool(self.rng.random() < node.hit_rate)
             if cache_hit[0] is None:
-                cache_hit[0] = bool(self.rng.random() < node.hit_rate)
-            if cache_hit[0]:
+                cache_hit[0] = hit
+            if hit:
                 return
 
         for edge in self.topology.outgoing_edges(node_name):
@@ -235,6 +241,7 @@ class CloudSimulator:
         """
         self._spawn_processes()
         self.env.run(until=self.config.duration)
+        self.collector.settle_unfinished(self.config.duration)
         self.collector.settle_cost(self.config.duration)
         summary = self.collector.summary()
         if suggest:

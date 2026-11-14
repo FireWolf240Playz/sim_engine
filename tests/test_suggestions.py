@@ -280,9 +280,10 @@ def test_summary_carries_verified_suggestions() -> None:
     summary = CloudSimulator(config).run()
     assert summary["suggestions"] == right_size(config, summary)
     raise_ = next(s for s in summary["suggestions"] if s["node"] == "app-worker")
-    # 2 → 8, not just past "undersized" (4): the repair phase sizes it until
-    # the run's SLA breach clears too.
-    assert (raise_["current"], raise_["proposed"]) == (2, 8)
+    # 2 → 11, not just past "undersized" (4): the repair phase sizes it until
+    # the run's SLA breach clears too. (8 before requests stuck at the horizon
+    # counted as failures: the starved run scored 5, not the 60s it showed.)
+    assert (raise_["current"], raise_["proposed"]) == (2, 11)
     assert "verified by simulation" in raise_["reason"]
 
 
@@ -351,7 +352,9 @@ def test_fix_outcome_matches_the_rerun() -> None:
     assert outcome["score_before"] == summary["resilience_score"]
     assert outcome["score_after"] == rerun["resilience_score"]
     assert outcome["band_after"] == rerun["score_explanation"]["band"]
-    assert {f["id"] for f in outcome["resolved"]} == {"sla_breach", "p95_headroom"}
+    # p95_headroom no longer fires here: a restored db serves its queue at
+    # once, so the failover's tail stays near the SLA (p95 10.7 s, was 17.1 s).
+    assert {f["id"] for f in outcome["resolved"]} == {"sla_breach"}
     assert outcome["unfixed"] == []
 
 

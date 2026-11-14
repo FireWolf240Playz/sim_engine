@@ -84,9 +84,10 @@ def _cache_outage(
     """Drive the cache hit-rate down (0.0 == fully disabled) for a window.
 
     More misses fall through to the database, so the DB genuinely gets more
-    load during the outage.
+    load during the outage. ``event.target`` names the cache to hit; without
+    it the first cache in node order is hit, which is the original behaviour.
     """
-    cache = topology.cache
+    cache = topology.component(event.target) if event.target is not None else topology.cache
     if cache is None:
         return  # nothing to fail - the process ends immediately
 

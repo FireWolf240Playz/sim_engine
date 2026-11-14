@@ -76,9 +76,12 @@ def test_evidence_and_score_are_unchanged(playbook: str | None) -> None:
     assert summary["resilience_score"] == plain["resilience_score"]
 
 
-def test_clean_demo_still_scores_98() -> None:
+def test_clean_demo_scores_97() -> None:
+    """98 until requests overdue at the horizon counted: one of the 117 had
+    already waited past the 10 s SLA when the run stopped."""
     _, summary = _run(None)
-    assert round(summary["resilience_score"]) == 98
+    assert round(summary["resilience_score"]) == 97
+    assert summary["overdue_requests"] == 1
 
 
 def test_verification_runs_carry_no_verified_fields() -> None:

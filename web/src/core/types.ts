@@ -174,6 +174,14 @@ export interface Summary {
   p99_latency: number | null;
   cache_hit_rate: number | null;
   total_retries: number;
+  /**
+   * Requests still in the system when the run stopped, and the part of them
+   * already past the SLA budget. The overdue ones are in `requests` as
+   * failures, so arrivals = `requests + unfinished_requests -
+   * overdue_requests`. Optional because older payloads predate the keys.
+   */
+  unfinished_requests?: number;
+  overdue_requests?: number;
   total_cost: number;
   cost_breakdown_by_component: Record<string, number>;
   component_sizing: Record<string, ComponentSizing>;

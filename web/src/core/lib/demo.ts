@@ -9,13 +9,18 @@ import type { ComponentRole, SimulationConfig } from "../types";
  * database, whole path, cache, external_api.
  *
  * Numbers were grid-searched against the real engine (seed 42, 60 s) so that
- * the CLEAN run reads healthy-but-tense (98/100, db right-sized at ~66%
+ * the CLEAN run reads healthy-but-tense (97/100, db right-sized at ~66%
  * mean utilization) while every incident visibly degrades it:
  *
- *   db_failover                 98 → 81   (db loses all slots 5 s, half 30 s)
- *   cross_region_latency_spike  98 → 87   (every hop ~80% slower, 15 s)
- *   cache_eviction_storm        98 → 71   (hit-rate −90%, 20 s, DB absorbs)
- *   dependency_timeout_cascade  98 → 50   (pricing_api down 10 s + tail)
+ *   db_failover                 97 → 94   (db loses all slots 5 s, half 30 s)
+ *   cross_region_latency_spike  97 → 86   (every hop ~80% slower, 15 s)
+ *   cache_eviction_storm        97 → 59   (hit-rate −90%, 20 s, DB absorbs)
+ *   dependency_timeout_cascade  97 → 57   (pricing_api down 10 s + tail)
+ *
+ * Scores re-measured 2026-11-14, after the engine began counting requests
+ * overdue at the horizon as failures and serving a restored node's queue at
+ * once (the search had landed on 98 / 81 / 87 / 71 / 50). db_failover is
+ * now a mild incident on these numbers; the topology itself is unchanged.
  *
  * Changing any of these invalidates that calibration — re-run the engine
  * before locking new numbers.

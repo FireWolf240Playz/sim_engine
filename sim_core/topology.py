@@ -96,10 +96,23 @@ class Component:
         ``Resource.capacity`` is a read-only property in SimPy, so we update
         its backing field directly. A value of ``0`` models a full outage:
         ``_do_put`` then refuses to admit any new request until it is restored.
+
+        Raising the capacity admits waiting requests at once. SimPy looks at
+        the queue only when a request arrives or a slot is released, and each
+        look admits at most the head of the queue (``Resource._do_put``
+        returns ``None``, which ends ``_trigger_put`` after one grant). Left
+        alone, a restored node would sit on free slots with requests still
+        queued, so the freed slots are handed out here, one look per slot.
         Returns the capacity actually applied (>= 0).
         """
         applied = max(0, int(new_capacity))
-        self.resource._capacity = applied  # noqa: SLF001 - the public property is read-only
+        resource = self.resource
+        resource._capacity = applied  # noqa: SLF001 - the public property is read-only
+        while resource.put_queue and resource.count < applied:
+            in_use = resource.count
+            resource._trigger_put(None)  # private: SimPy has no public "re-check the queue"
+            if resource.count == in_use:  # pragma: no cover - defensive: nothing admitted
+                break
         return applied
 
     # -- reference-counted chaos knobs (used by chaos) ----------------------

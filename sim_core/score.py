@@ -111,7 +111,7 @@ def resilience_score(summary: Dict[str, Any]) -> Optional[float]:
 
     sla = summary.get("sla_compliance")
     if sla is None:
-        sla = 1.0  # no SLA configured ⇒ the engine counts every request as met
+        sla = 1.0  # no compliance figure in the dict ⇒ nothing to deduct
     completion = summary.get("completion_rate")
     if completion is None:
         completion = 0.0
@@ -391,7 +391,7 @@ def score_explanation(summary: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     sla = summary.get("sla_compliance")
     if sla is None:
-        sla = 1.0  # no SLA configured ⇒ the engine counts every request as met
+        sla = 1.0  # no compliance figure in the dict ⇒ nothing to deduct
     completion = summary.get("completion_rate")
     if completion is None:
         completion = 0.0
