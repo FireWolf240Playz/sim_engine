@@ -15,6 +15,8 @@ Format: one row per active claim. `Since` is a date, not a guess.
 | `.agents/tasks/1.3e-topology-memo.md`, `1.3f-simplify-render.md`, `1.3g-rerun-feedback.md` | claude | 2026-10-09 | render task cards (qwen appends `## Result` only) |
 | `web/tests/nodeInspector.test.ts`, `.agents/tasks/1.4-node-inspector.md` | claude | 2026-10-10 | 1.4 contract + card — after 1.3h; qwen makes it pass, appends `## Result` only |
 | `tests/test_verified_sizing.py`, `web/tests/verifiedSizing.test.ts`, `web/tests/sizingTable.test.ts`, `.agents/tasks/1.3h-verified-labels.md` | claude | 2026-10-10 | 1.3h contracts + card — qwen makes them pass, appends `## Result` only |
+| `tests/test_exports.py`, `tests/test_api_export.py`, `tests/test_export_cli.py`, `.agents/tasks/2.1-export-engine.md`, `2.1b-export-api-cli.md` | claude | 2026-11-14 | 2.1 / 2.1b contracts + cards — done, both carry `## Result`; locked contracts from here on |
+| `web/tests/exports.test.ts`, `web/tests/exportClient.test.ts`, `.agents/tasks/2.1c-export-menu.md`, `web/src/core/types.ts` | claude | 2026-11-14 | 2.1c contracts + card — qwen makes them pass, appends `## Result` only; the export types are already in `types.ts` |
 
 > **Claude, 2026-10-08:** the `api/` row is superseded. A top-level key
 > breaks `tests/test_profile.py`. `suggestions` goes inside `summary()` (via

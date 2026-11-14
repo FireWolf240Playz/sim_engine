@@ -91,7 +91,8 @@ this repo.
 | `compare.py` | 12 | One core, three faces: `run_many`, `diff_runs`, `set_path` (dotted-path patching), `apply_provider`, `sweep`, `knee_point`. Backs `eleven compare multi-cloud|what-if|sweep`. |
 | `importers.py` | 26 | Terraform/YAML/JSON → `SimulationConfig`. `import_architecture()` is the entry; everything else is private estimation tables. An imported load balancer picks one worker per request (edge group `workers`) and reaches the cache only through it. **Open only for import bugs.** |
 | `viz.py` | 8 | Matplotlib report PNG. `render_report`, `render_comparison`. |
-| `cli/sim.py` | 22 | `run` / `demo` / `playbooks` / `compare` subcommands + all terminal formatting. |
+| `exports.py` | 16 | **Export center (2.1).** Pure, no `sim_core` import: `to_csv(request_log)` (one row per request, `CSV_COLUMNS`), `to_json` (summary + config + seed, replayable), `to_xlsx` (`XLSX_SHEETS`: Summary, Per-node, Findings; `openpyxl` imported inside). `EXPORT_FORMATS` is the registry the API and the CLI both read (`extension`, `media_type`, `tier`, `uses_summary`); `render_export(name, ...)` → bytes is the only way a file is made. `spreadsheet_safe` stops a cell being read as a formula. The rows come from `MetricsCollector.request_log()`. |
+| `cli/sim.py` | 26 | `run` / `demo` / `playbooks` / `compare` subcommands + all terminal formatting. `--export FORMAT ...` / `--export-base PATH` on `run` and `demo` write the run that was just printed (`write_exports`, bytes, never a second simulation); with `--seeds N` it is the typical run. |
 | `cli/pricing.py` | 14 | `prices` / `aws-prices` / `gcp-prices` catalog subcommands. |
 | `price_source/` | 60 | Live cloud price catalogs (AWS/Azure/GCP + `base.py` HTTP/cache plumbing). **Self-contained. Ignore unless the task is pricing.** Needs `.env` credentials for GCP. |
 
@@ -109,6 +110,11 @@ the API validates by exactly the same rules as the CLI.
   `n_seeds > 1` (then also returns `seeds` / `runs` / `profile` /
   `typical_seed`, and with `include_timeseries` the typical run's
   `timeseries` plus `timeseries_band`). The single-run key set is pinned.
+  `apply_playbook_or_404` is the one playbook lookup every route uses.
+- `routes/export.py` — `GET /export/formats`, `POST /export`
+  `{config, format, playbook?}` → the file, named in `Content-Disposition`.
+  The API keeps no run, so it simulates the config again: a config without a
+  seed is a 422. CSV skips the Fix-it plan. `tier` is a label, not a gate.
 - `routes/compare.py` — `POST /compare` (multi-cloud / what-if / sweep).
 - `routes/imports_api.py` — `POST /imports`.
 - `routes/playbooks.py`, `routes/presets.py` — `GET`, trivial.
@@ -176,7 +182,7 @@ the API validates by exactly the same rules as the CLI.
   `npm run test:unit`.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
 
-## `tests/` — pytest, 26 files, ~370 tests
+## `tests/` — pytest, 29 files, ~425 tests
 
 Mirrors `sim_core/`: `test_engine.py`, `test_score.py`, `test_findings.py`, …
 The engine-review fixes are pinned one file per rule: `test_accounting.py`
@@ -186,6 +192,8 @@ explanation = score), `test_cost_model.py`, `test_chaos_semantics.py`,
 `test_fix_plan.py` (plan cost and seed), `test_traffic.py`,
 `test_config_strict.py`, `test_edge_groups.py`, `test_api_limits.py`. Each
 opens with what was measured before the fix.
+The export center is three files: `test_exports.py` (the formats),
+`test_api_export.py` (the route), `test_export_cli.py` (`--export`).
 `test_api.py` covers the FastAPI layer with `TestClient`. `test_cli.py` pins
 CLI user-error paths (exit codes + stderr), which no simulation exercises.
 `tests/fixtures/suggestions_applied.yaml` is written by the Vitest suite and
@@ -200,8 +208,9 @@ read by `test_suggestions.py`: run the web tests first or that test skips.
 **Where we are:** Wave 1. 1.1 (multi-seed confidence), 1.2 (findings +
 rich verdict card), 1.3 (verified "Fix it" + change log), 1.3e–1.3g
 (render streamlining), 1.3h (verified sizing labels) and 1.4 (node
-inspector) shipped: Wave 1 is done. Next: Wave 2, 2.1 export center.
-Waves 2–6 untouched.
+inspector) shipped: Wave 1 is done. Wave 2: 2.1 export center has its
+engine (2.1) and its API + CLI (2.1b); the download menu in the web UI
+(2.1c) is next. Waves 3–6 untouched.
 
 ## `.agents/` — how the agents coordinate
 
