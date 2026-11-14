@@ -16,14 +16,15 @@ function labelOf(name: string): string {
 
 /**
  * The incident selector as a segmented control: every option is visible
- * at a glance, and the selected one carries its description inline below
- * — you always know what you are about to do.
+ * at a glance, and the selected one carries its description beside it
+ * (below it when the row is too narrow) — you always know what you are
+ * about to do.
  */
 export function IncidentPicker({ value, onChange, options, disabled }: Props) {
   const selected = options.find((p) => p.name === value);
 
   return (
-    <div>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
       <div
         role="radiogroup"
         aria-label="Incident"
@@ -45,7 +46,7 @@ export function IncidentPicker({ value, onChange, options, disabled }: Props) {
           />
         ))}
       </div>
-      <p className="mt-2.5 min-h-5 text-[13px] leading-5 text-ink-dim">
+      <p className="min-h-5 min-w-0 flex-1 basis-96 text-[13px] leading-5 text-ink-dim">
         {selected
           ? selected.description
           : "No incident — the clean baseline run, so you know where the headroom is."}

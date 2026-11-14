@@ -65,6 +65,19 @@ function ErrorState({ message }: { message: string }) {
   );
 }
 
+/**
+ * The simulator as a dashboard, read top to bottom:
+ *
+ *   toolbar     what is being tested, and the three actions (mode, export, run)
+ *   incident    the one input of a run
+ *   tiles       the run in six numbers
+ *   topology    where it broke (full width: the graph never shrinks)
+ *   two columns left: the verdict and how sure it is; right: what to change,
+ *               then the evidence (timeline, sizing)
+ *
+ * The columns flow independently, so a long verdict never pushes a gap into
+ * the evidence beside it. Below `xl` they stack in reading order.
+ */
 export default function HomePage() {
   const {
     config,
@@ -122,22 +135,13 @@ export default function HomePage() {
   const inspection = inspected && result ? inspectNode(inspected, config, result, stale) : null;
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-4">
-        <div className="min-w-0 max-w-2xl">
-          <h1 className="text-xl font-semibold tracking-tight text-ink">
-            Stress test
-          </h1>
-          <p className="mt-1.5 text-sm leading-6 text-ink-dim">
-            Pick an incident, run it against the{" "}
-            <span className="font-medium text-ink">{architectureLabel}</span>, and see
-            exactly where the architecture breaks — and what keeping it alive
-            costs — before it&apos;s real infrastructure.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
+    <div className="flex flex-col gap-4">
+      {/* Toolbar: stays in reach while the results scroll under it. */}
+      <div className="z-20 -mx-4 -mt-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 bg-surface-0/90 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 md:sticky md:top-0 md:-mt-8">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+          <h1 className="text-xl font-semibold tracking-tight text-ink">Stress test</h1>
           {!isDemoArchitecture ? (
-            <span className="flex items-center gap-2 rounded-lg border border-accent/40 bg-accent-soft px-2.5 py-1.5">
+            <span className="flex items-center gap-2 rounded-lg border border-accent/40 bg-accent-soft px-2.5 py-1">
               <span className="text-[12px] font-medium text-accent">{architectureLabel}</span>
               <button
                 type="button"
@@ -148,14 +152,17 @@ export default function HomePage() {
               </button>
             </span>
           ) : (
-            <span className="hidden font-mono text-[11px] text-ink-dim lg:inline">
-              seed 42 · 60s run
+            <span className="text-[13px] text-ink-dim">
+              {architectureLabel}
+              <span className="ml-2 hidden font-mono text-[11px] lg:inline">seed 42 · 60s run</span>
             </span>
           )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5">
           <div
             role="group"
             aria-label="Run mode"
-            className="flex h-7 items-center rounded-lg border border-line bg-surface-1 p-0.5"
+            className="flex h-8 items-center rounded-lg border border-line bg-surface-1 p-0.5"
           >
             {RUN_MODES.map(({ mode, label }) => (
               <button
@@ -164,7 +171,7 @@ export default function HomePage() {
                 onClick={() => setRunMode(mode)}
                 disabled={isPending}
                 aria-pressed={runMode === mode}
-                className={`h-6 rounded-md px-3 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`h-[26px] rounded-md px-3 text-[13px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60 ${
                   runMode === mode
                     ? "bg-accent text-white shadow-card"
                     : "text-ink-dim hover:text-ink"
@@ -174,6 +181,7 @@ export default function HomePage() {
               </button>
             ))}
           </div>
+          <ExportMenu run={measuredRun} result={result} disabled={isPending} />
           <button
             type="button"
             onClick={() => requestRun()}
@@ -185,79 +193,34 @@ export default function HomePage() {
         </div>
       </div>
 
-      <Panel title="Incident" aside="each one mutates live simulation state">
-        <IncidentPicker
-          value={playbook}
-          onChange={setPlaybook}
-          options={playbooks?.playbooks ?? []}
-          disabled={isPending}
-        />
-      </Panel>
+      <section
+        aria-label="Incident"
+        className="flex flex-wrap items-start gap-x-4 gap-y-2 rounded-xl border border-line bg-surface-1 px-4 py-2.5 shadow-card"
+      >
+        {/* Lined up with the segmented control's row, whether the
+            description sits beside the control or wraps under it. */}
+        <h2 className="mt-2.5 text-[13px] font-semibold leading-5 text-ink">Incident</h2>
+        <div className="min-w-0 flex-1">
+          <IncidentPicker
+            value={playbook}
+            onChange={setPlaybook}
+            options={playbooks?.playbooks ?? []}
+            disabled={isPending}
+          />
+        </div>
+      </section>
 
       {error ? <ErrorState message={error} /> : null}
 
       {/* Results stay mounted across runs: React patches only what changed,
-          and a run in flight dims them instead of blanking the page. */}
-      <div className="eleven-results flex flex-col gap-5" aria-busy={isPending}>
-      <StatCards summary={result?.summary ?? null} context={context} />
+          and a run in flight dims them instead of blanking the page. The
+          dimming applies to this element's direct children. */}
+      <div className="eleven-results flex flex-col gap-4" aria-busy={isPending}>
+        <StatCards summary={result?.summary ?? null} context={context} />
 
-      <VerdictPanel
-        summary={result?.summary ?? null}
-        context={context}
-        architectureLabel={architectureLabel}
-        seeds={result?.seeds ?? null}
-        fixHistory={fixHistory}
-      />
-
-      {result ? (
-        <Panel title="Fix it" aside="sizes verified by simulation on the same seed">
-          {fixView.outcome && result.summary.fix_outcome ? (
-            <FixOutcomePreview outcome={result.summary.fix_outcome} />
-          ) : null}
-          {fixView.diff ? (
-            <FixDiffPanel
-              config={config}
-              suggestions={suggestions}
-              onApply={applyAndRerun}
-              isPending={isPending}
-            />
-          ) : fixView.note !== null ? (
-            // Kept mounted when empty, so applying a fix never makes the
-            // panels below jump up the page.
-            <p className="text-[13px] text-ink-dim">{FIX_NOTES[fixView.note]}</p>
-          ) : null}
-        </Panel>
-      ) : null}
-
-      {result && measuredRun ? (
-        <Panel title="Export" aside="the data behind this run">
-          <ExportMenu run={measuredRun} result={result} disabled={isPending} />
-        </Panel>
-      ) : null}
-
-      {fixHistory.length ? (
-        <Panel title="Changes applied" aside="each one re-run and measured">
-          <FixHistoryList history={fixHistory} />
-        </Panel>
-      ) : null}
-
-      {result?.profile ? (
-        <Panel
-          title="Confidence across seeds"
-          aside={
-            result.seeds && result.seeds.length > 0
-              ? `seeds ${result.seeds.join(" · ")}`
-              : undefined
-          }
-        >
-          <ConfidencePanel profile={result.profile} />
-        </Panel>
-      ) : null}
-
-      {result && sizing ? (
-        <>
-          {/* eleven-live: stays at full strength while a re-run runs — only
-              the re-measured nodes and the other panels dim. */}
+        {result && sizing ? (
+          // eleven-live: stays at full strength while a re-run runs — only
+          // the re-measured nodes and the other panels dim.
           <div className="eleven-live">
             <Panel
               title="Topology"
@@ -282,32 +245,90 @@ export default function HomePage() {
               ) : null}
             </Panel>
           </div>
+        ) : null}
 
-          <Panel
-            title="Timeline"
-            aside={
-              result.typical_seed != null
-                ? `typical run · seed ${result.typical_seed}`
-                : "latency vs chaos, one clock"
-            }
-          >
-            <TimelineChart
-              ticks={result.timeseries ?? []}
-              slaTarget={config.sla_target}
-              windows={chaosWindows(result.chaos, config.traffic.duration)}
-              horizon={config.traffic.duration}
-              band={result.timeseries_band}
-              seedCount={result.seeds?.length}
-            />
-          </Panel>
+        {result ? (
+          <div className="grid items-start gap-4 xl:grid-cols-12">
+            {/* Left: what is wrong, and how sure the score is. */}
+            <div className="flex min-w-0 flex-col gap-4 xl:col-span-6">
+              <VerdictPanel
+                summary={result.summary}
+                context={context}
+                architectureLabel={architectureLabel}
+                seeds={result.seeds ?? null}
+                fixHistory={fixHistory}
+              />
 
-          <Panel title="Sizing" aside="where the money sits">
-            <SizingTable nodes={config.topology.nodes} sizing={sizing} stale={stale} />
-          </Panel>
-        </>
-      ) : (
-        !error && <EmptyState />
-      )}
+              {result.profile ? (
+                <Panel
+                  title="Confidence across seeds"
+                  aside={
+                    result.seeds && result.seeds.length > 0
+                      ? `seeds ${result.seeds.join(" · ")}`
+                      : undefined
+                  }
+                >
+                  <ConfidencePanel profile={result.profile} />
+                </Panel>
+              ) : null}
+            </div>
+
+            {/* Right: what to change, then the evidence. */}
+            <div className="flex min-w-0 flex-col gap-4 xl:col-span-6">
+              <Panel title="Fix it" aside="sizes verified by simulation on the same seed">
+                {fixView.outcome && result.summary.fix_outcome ? (
+                  <FixOutcomePreview outcome={result.summary.fix_outcome} />
+                ) : null}
+                {fixView.diff ? (
+                  <FixDiffPanel
+                    config={config}
+                    suggestions={suggestions}
+                    onApply={applyAndRerun}
+                    isPending={isPending}
+                  />
+                ) : fixView.note !== null ? (
+                  // Kept mounted when empty, so applying a fix never makes the
+                  // panels below jump up the page.
+                  <p className="text-[13px] text-ink-dim">{FIX_NOTES[fixView.note]}</p>
+                ) : null}
+              </Panel>
+
+              {fixHistory.length ? (
+                <Panel title="Changes applied" aside="each one re-run and measured">
+                  <FixHistoryList history={fixHistory} />
+                </Panel>
+              ) : null}
+
+              {sizing ? (
+                <Panel
+                  title="Timeline"
+                  aside={
+                    result.typical_seed != null
+                      ? `typical run · seed ${result.typical_seed}`
+                      : "latency vs chaos, one clock"
+                  }
+                >
+                  <TimelineChart
+                    ticks={result.timeseries ?? []}
+                    slaTarget={config.sla_target}
+                    windows={chaosWindows(result.chaos, config.traffic.duration)}
+                    horizon={config.traffic.duration}
+                    band={result.timeseries_band}
+                    seedCount={result.seeds?.length}
+                  />
+                </Panel>
+              ) : null}
+
+              {sizing ? (
+                <Panel title="Sizing" aside="where the money sits">
+                  <SizingTable nodes={config.topology.nodes} sizing={sizing} stale={stale} />
+                </Panel>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          !error && <EmptyState />
+        )}
       </div>
     </div>
   );

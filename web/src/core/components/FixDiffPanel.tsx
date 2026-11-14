@@ -108,7 +108,7 @@ export function FixDiffPanel({ config, suggestions, onApply, isPending }: Props)
                   <td className="max-w-[34ch] py-2.5 pr-4 text-[13px] leading-snug text-ink-dim">
                     {suggestion?.reason ?? row.param}
                   </td>
-                  <td className={`py-2.5 text-right font-mono text-sm ${delta.tone}`}>
+                  <td className={`whitespace-nowrap py-2.5 pr-4 text-right font-mono text-sm ${delta.tone}`}>
                     {delta.text}
                   </td>
                   <td className="py-2.5 text-right">

@@ -33,6 +33,10 @@ type NodeBodyProps = NodeViewModel & { x: number; y: number };
 
 const MONO = "IBM Plex Mono, ui-monospace, monospace";
 
+/** How far the diagram may grow past its natural size. On a wide canvas an
+ * uncapped graph of four nodes becomes four posters; past this it centers. */
+const MAX_SCALE = 1.3;
+
 /**
  * Every color below is a Tailwind utility resolving to a CSS variable
  * from globals.css — `fill-surface-1`, `stroke-edge`, `fill-sev-crit`.
@@ -480,8 +484,8 @@ export const TopologyDiagram = memo(function TopologyDiagram({
           viewBox={`0 0 ${width} ${height}`}
           width={width}
           height={height}
-          style={{ minWidth: width, maxWidth: "100%" }}
-          className="h-auto w-full"
+          style={{ minWidth: width, maxWidth: `min(100%, ${Math.round(width * MAX_SCALE)}px)` }}
+          className="mx-auto block h-auto w-full"
           role="img"
           aria-label={`Topology: ${nodes.map((n) => n.name).join(", ")}; incident targets: ${
             wholePath ? "whole path" : targetNames.join(", ") || "none"

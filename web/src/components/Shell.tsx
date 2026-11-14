@@ -278,7 +278,8 @@ function Brand({ collapsed }: { collapsed: boolean }) {
  * Presets) with the theme toggle and a sidebar collapse control in the
  * top-right beside the brand, plus live engine status at the bottom.
  * The collapse state persists across sessions and animates the sidebar
- * width; labels and secondary text hide when collapsed. On narrow
+ * width; labels and secondary text hide when collapsed. The sidebar stays
+ * in view while a long page scrolls beside it. On narrow
  * screens the sidebar becomes a top block — the same four functions.
  */
 export function Shell({ children }: { children: ReactNode }) {
@@ -291,7 +292,7 @@ export function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-full flex-1 flex-col md:flex-row">
       <aside
-        className={`shrink-0 border-b border-line bg-surface-1 transition-[width] duration-200 ease-out md:overflow-hidden md:border-b-0 md:border-r ${
+        className={`shrink-0 border-b border-line bg-surface-1 transition-[width] duration-200 ease-out md:sticky md:top-0 md:h-screen md:overflow-hidden md:border-b-0 md:border-r ${
           collapsed ? "md:w-16" : "md:w-60"
         }`}
       >
@@ -325,11 +326,11 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 md:py-8">
+        <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-6 sm:px-6 md:py-8">
           {children}
         </main>
         <footer className="border-t border-line bg-surface-1">
-          <div className="mx-auto w-full max-w-6xl px-4 py-3 text-[11px] text-ink-dim sm:px-6">
+          <div className="mx-auto w-full max-w-[1600px] px-4 py-3 text-[11px] text-ink-dim sm:px-6">
             Cost projections assume the same load sustained 24/7 — a planning
             figure, not a bill.
           </div>

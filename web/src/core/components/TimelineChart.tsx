@@ -181,6 +181,10 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon, band, seedCo
                   label={{
                     value: w.event_type.replace(/_/g, " "),
                     position: "insideTop",
+                    // Neighbouring windows take alternate rows: a short
+                    // window is narrower than its own label, and two labels
+                    // on one row print over each other.
+                    offset: 6 + (i % 2) * 13,
                     fill: tokens.color["--color-sev-crit"],
                     fontSize: 10,
                     fontFamily: MONO,

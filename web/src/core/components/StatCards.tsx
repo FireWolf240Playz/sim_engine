@@ -1,10 +1,12 @@
 import type { ReactNode } from "react";
-import type { Summary } from "../types";
+import type { Finding, Summary } from "../types";
 import {
   SEVERITY_TEXT,
   SEVERITY_WORD,
   fmtMoney,
   fmtMoneyFull,
+  fmtPct,
+  fmtSeconds,
   gradeSeverity,
   scoreSeverity,
   type Severity,
@@ -64,7 +66,34 @@ function DollarIcon({ className = "h-4 w-4" }: { className?: string }) {
   );
 }
 
-function IconChip({ tone, children }: { tone: "neutral" | Severity; children: ReactNode }) {
+function ClockIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="5.8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M8 4.8V8l2.2 1.4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function DroppedIcon({ className = "h-4 w-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 16 16" className={className} aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="5.8" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m5.9 5.9 4.2 4.2M10.1 5.9l-4.2 4.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+type Tone = "neutral" | Severity;
+
+function IconChip({ tone, children }: { tone: Tone; children: ReactNode }) {
   const cls =
     tone === "neutral"
       ? "bg-surface-2 text-ink-dim"
@@ -74,7 +103,7 @@ function IconChip({ tone, children }: { tone: "neutral" | Severity; children: Re
           ? "bg-sev-warn-soft text-sev-warn"
           : "bg-sev-crit-soft text-sev-crit";
   return (
-    <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${cls}`}>
+    <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${cls}`}>
       {children}
     </span>
   );
@@ -96,13 +125,13 @@ function StatCard({
   caption: string;
 }) {
   return (
-    <div className="rounded-xl border border-line bg-surface-1 p-5 shadow-card">
-      <div className="flex items-start justify-between gap-3">
-        <span className="text-[13px] font-medium text-ink-dim">{label}</span>
+    <div className="rounded-xl border border-line bg-surface-1 px-4 py-3.5 shadow-card">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[12.5px] font-medium text-ink-dim">{label}</span>
         {chip}
       </div>
-      <div className="mt-3 flex items-baseline gap-2.5">
-        <span className="text-[28px] font-semibold leading-none tracking-tight text-ink">
+      <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="text-2xl font-semibold leading-none tracking-tight text-ink tabular-nums">
           {value}
         </span>
         {word ? (
@@ -111,15 +140,29 @@ function StatCard({
           </span>
         ) : null}
       </div>
-      <p className="mt-2.5 text-xs leading-5 text-ink-dim">{caption}</p>
+      <p className="mt-2 text-xs leading-[18px] text-ink-dim">{caption}</p>
     </div>
   );
 }
 
+/** The tone of the finding with this id, or `null` when the run has none. */
+function findingTone(findings: Finding[] | null | undefined, id: string): Severity | null {
+  const hit = findings?.find((finding) => finding.id === id);
+  if (!hit) return null;
+  return hit.severity === "crit" ? "crit" : hit.severity === "warn" ? "warn" : "ok";
+}
+
+const GRID = "grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6";
+
 /**
- * The run headline as three stat cards — the CLI one-liner
- * (`Resilience 81/100 · Cost grade C · $1.2k/mo`) rendered the way a
- * dashboard reads: big number, soft icon chip, one-line caption.
+ * The run headline as a strip of six tiles: the CLI one-liner (resilience,
+ * cost grade, projected bill) plus the three numbers behind it (SLA
+ * compliance, P95 latency, failed requests). Big number, small icon chip,
+ * one short caption each.
+ *
+ * A tile's colour is never decided here: the SLA and P95 tiles take the tone
+ * of the engine's own `sla_breach` / `p95_headroom` findings, so a tile can
+ * never disagree with the verdict under it. Failed requests carry no tone.
  * Renders meaningful pre-run placeholders instead of hiding.
  */
 export function StatCards({
@@ -127,42 +170,29 @@ export function StatCards({
   context,
 }: {
   summary: Summary | null;
-  /** e.g. "under db failover" or "clean run" — the incident in context. */
+  /** e.g. "under db failover" or "on the clean run" — the incident in context. */
   context?: string;
 }) {
   if (!summary) {
+    const blank: Array<{ label: string; icon: ReactNode; caption: string }> = [
+      { label: "Resilience", icon: <ShieldIcon />, caption: "Run to score this architecture" },
+      { label: "SLA compliance", icon: <ShieldIcon />, caption: "Run to see how many requests made it in time" },
+      { label: "P95 latency", icon: <ClockIcon />, caption: "Run to measure the slow tail" },
+      { label: "Failed requests", icon: <DroppedIcon />, caption: "Run to count what never completed" },
+      { label: "Cost grade", icon: <GaugeIcon />, caption: "Run to grade the right-sizing" },
+      { label: "Projected bill", icon: <DollarIcon />, caption: "Run to project the 24/7 bill" },
+    ];
     return (
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard
-          label="Resilience"
-          chip={
-            <IconChip tone="neutral">
-              <ShieldIcon />
-            </IconChip>
-          }
-          value="—"
-          caption="Run an incident to score this architecture"
-        />
-        <StatCard
-          label="Cost grade"
-          chip={
-            <IconChip tone="neutral">
-              <GaugeIcon />
-            </IconChip>
-          }
-          value="—"
-          caption="Run to grade the right-sizing"
-        />
-        <StatCard
-          label="Projected bill"
-          chip={
-            <IconChip tone="neutral">
-              <DollarIcon />
-            </IconChip>
-          }
-          value="—"
-          caption="Run to project the 24/7 bill"
-        />
+      <div className={GRID}>
+        {blank.map((tile) => (
+          <StatCard
+            key={tile.label}
+            label={tile.label}
+            chip={<IconChip tone="neutral">{tile.icon}</IconChip>}
+            value="—"
+            caption={tile.caption}
+          />
+        ))}
       </div>
     );
   }
@@ -175,8 +205,17 @@ export function StatCards({
   const steady = summary.steady_state_cost_extrapolation;
   const nodes = summary.component_sizing ? Object.keys(summary.component_sizing).length : 0;
 
+  const hasSla = summary.sla_target !== null && summary.sla_target !== undefined;
+  const slaTone: Tone =
+    summary.sla_compliance === null ? "neutral" : (findingTone(summary.findings, "sla_breach") ?? "ok");
+  const p95Tone: Tone =
+    summary.p95_latency === null || !hasSla
+      ? "neutral"
+      : (findingTone(summary.findings, "p95_headroom") ?? "ok");
+  const unfinished = summary.unfinished_requests ?? 0;
+
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className={GRID}>
       <StatCard
         label="Resilience"
         chip={
@@ -187,10 +226,44 @@ export function StatCards({
         value={score === null ? "n/a" : `${Math.round(score)}/100`}
         word={SEVERITY_WORD[scoreSev]}
         wordClass={SEVERITY_TEXT[scoreSev]}
+        caption={context ? `Scored ${context}` : "Scored on SLA compliance and completion"}
+      />
+      <StatCard
+        label="SLA compliance"
+        chip={
+          <IconChip tone={slaTone}>
+            {slaTone === "neutral" ? <ShieldIcon /> : <SeverityIcon severity={slaTone} />}
+          </IconChip>
+        }
+        value={fmtPct(summary.sla_compliance, 1)}
         caption={
-          context
-            ? `Scored on SLA compliance and completion ${context}`
-            : "Scored on SLA compliance and completion"
+          hasSla
+            ? `Requests answered within ${summary.sla_target}s`
+            : "No SLA target set: every completed request counts"
+        }
+      />
+      <StatCard
+        label="P95 latency"
+        chip={
+          <IconChip tone={p95Tone}>
+            {p95Tone === "neutral" ? <ClockIcon /> : <SeverityIcon severity={p95Tone} />}
+          </IconChip>
+        }
+        value={fmtSeconds(summary.p95_latency)}
+        caption={`Median ${fmtSeconds(summary.p50_latency)}, p99 ${fmtSeconds(summary.p99_latency)}`}
+      />
+      <StatCard
+        label="Failed requests"
+        chip={
+          <IconChip tone="neutral">
+            <DroppedIcon />
+          </IconChip>
+        }
+        value={String(summary.failed_requests)}
+        caption={
+          unfinished > 0
+            ? `Of ${summary.requests} recorded; ${unfinished} still in flight at the end`
+            : `Of ${summary.requests} recorded`
         }
       />
       <StatCard
@@ -201,11 +274,7 @@ export function StatCards({
           </IconChip>
         }
         value={grade ?? "–"}
-        caption={
-          nodes > 0
-            ? `Right-sizing across ${nodes} nodes — steady-state utilization bands`
-            : "Right-sizing verdict from mean utilization bands"
-        }
+        caption={nodes > 0 ? `Right-sizing across ${nodes} nodes` : "Right-sizing of the nodes"}
       />
       <StatCard
         label="Projected bill"
@@ -218,9 +287,9 @@ export function StatCards({
         caption={
           extrap && extrap.month > 0
             ? steady
-              ? `Steady state ${fmtMoneyFull(steady.month)}/mo — ${fmtMoney(extrap.year)}/yr, 24/7 assumption`
-              : `${fmtMoney(extrap.year)}/yr, assuming the same load sustained 24/7`
-            : "No rates configured — add cost_per_hour to nodes"
+              ? `Steady state ${fmtMoneyFull(steady.month)}/mo, ${fmtMoney(extrap.year)}/yr`
+              : `${fmtMoney(extrap.year)}/yr at this load, 24/7`
+            : "No rates configured on the nodes"
         }
       />
     </div>
