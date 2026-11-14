@@ -104,7 +104,7 @@ topology = TopologyConfig(
 )
 ```
 
-The presets bake in a directional `cost_per_hour`, so cost + right-sizing reporting works out of the box. Tune any of them with `preset.model_copy(update={"max_capacity": 4, ...})`. The numbers are **directional estimates, not guaranteed benchmarks** — for exact live rates use the `aws-prices` / `prices` / `gcp-prices` catalog commands.
+The presets bake in a directional `cost_per_hour` (their instance's hourly list price spread over its slots, so an idle preset bills its list price), so cost + right-sizing reporting works out of the box. Tune any of them with `preset.model_copy(update={"max_capacity": 4, ...})`. The numbers are **directional estimates, not guaranteed benchmarks** — for exact live rates use the `aws-prices` / `prices` / `gcp-prices` catalog commands.
 
 ## Compare runs
 
@@ -147,7 +147,7 @@ The engine is also a plain library — `from sim_core import compare` gives you 
 | `cost_breakdown_by_component` | That total split per component. |
 | `component_sizing` | Per-component right-sizing verdict: `mean_utilization` (the verdict driver — in steady state it equals offered load per slot, the classic capacity-planning number), `p95_utilization` / `p95_queue` (context), `recommended_capacity` (size-to-your-p99 concurrent demand), and `status` — `undersized` (mean utilisation ≥ 85%), `right_sized`, or `oversized` (mean utilisation ≤ 50% — paying for slots that sit idle). Computed on every run, even with costs disabled. |
 
-Cost is opt-in: set `cost_per_hour` on any component in the config (e.g. the provider's hourly rate for that tier - the `azure-prices` / `aws-prices` / `gcp-prices` commands resolve live rates for exactly this). Leave it at the default `0.0` and cost fields report zero. The sizing check is independent of cost and always advises whether a topology is over-, under-, or well-provisioned for its load.
+Cost is opt-in: set `cost_per_hour` on any component in the config. It is a rate **per slot**, so for an instance priced by the hour use its hourly rate divided by the node's `max_capacity` (the `azure-prices` / `aws-prices` / `gcp-prices` commands resolve the live hourly rates); an idle node then bills exactly that hourly rate. Leave it at the default `0.0` and cost fields report zero. The sizing check is independent of cost and always advises whether a topology is over-, under-, or well-provisioned for its load.
 
 The report also plots per-component queue depth and utilisation over time.
 
@@ -193,7 +193,7 @@ A cache **hit** serves the response and skips the database; a **miss** falls thr
 | `network_latency` | Inflates every component's live mean service time. | Multiplier minus one (0.5 ⇒ 1.5x). |
 | `cache_outage` | Drives the cache hit-rate down (1.0 ⇒ fully disabled). | Fraction of hit-rate removed. |
 
-Each event holds the disruption for `duration`, restores the original value, and repeats every `interval` seconds.
+Each event holds the disruption for `duration`, restores the original value, rests for `interval` seconds, and strikes again: one cycle is `duration + interval`.
 
 ## Incident playbooks
 
@@ -254,7 +254,7 @@ uvicorn api.main:app --reload   # from the repo root; interactive docs at http:/
 | `GET /presets` | The 12 provider × role presets as plain JSON — realistic starting points per component. |
 | `GET /health` | Liveness + engine version. |
 
-CORS is currently permissive (`*`) so the Phase 5 Next.js frontend can call it from any local origin; tighten to the real frontend origin once it has one. Tests: `tests/test_api.py` (FastAPI `TestClient`, covers every endpoint, both happy paths and the error mappings).
+CORS admits a frontend served from this machine (`localhost` / `127.0.0.1`, any port) by default; a deployment names its origins in `ELEVEN_CORS_ORIGINS` (comma-separated). One call may simulate at most 200,000 requests across all its runs (seeds, compare variants, sweep points) and sweep at most 25 values; over that it answers 422 with the numbers. The CLI has no such limit. Tests: `tests/test_api.py` (FastAPI `TestClient`, covers every endpoint, both happy paths and the error mappings) and `tests/test_api_limits.py`.
 
 ## Reproducibility
 
