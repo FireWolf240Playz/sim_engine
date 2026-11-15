@@ -75,19 +75,20 @@ this repo.
 
 | File | KB | What it is / open it when |
 |---|---|---|
-| `config.py` | 22 | **All Pydantic models.** `SimulationConfig`, `GraphTopologyConfig`, `Edge`, `TrafficPattern`, `ChaosEvent`, `ComponentRole`. Open for: adding a config field, a validation rule. Grep the class name; never read whole. Note `TopologyConfig` is the legacy 4-node shape kept for compatibility — `.to_graph()` converts it to `GraphTopologyConfig`, which is what the engine actually runs. Every model is strict (`extra="forbid"`): an unknown field is an error, and `hit_rate` is only valid on a cache. `Edge.group` marks alternative edges (one is taken per request). `TrafficPattern.expected_requests()` / `peak_rps()` back the run-size limit `MAX_EXPECTED_REQUESTS`. |
+| `config.py` | 22 | **All Pydantic models.** `SimulationConfig`, `GraphTopologyConfig`, `Edge`, `TrafficPattern`, `ChaosEvent`, `ComponentRole`. Open for: adding a config field, a validation rule. Grep the class name; never read whole. Note `TopologyConfig` is the legacy 4-node shape kept for compatibility — `.to_graph()` converts it to `GraphTopologyConfig`, which is what the engine actually runs. Every model is strict (`extra="forbid"`): an unknown field is an error, and `hit_rate` is only valid on a cache. `Edge.group` marks alternative edges (one is taken per request). `TrafficPattern.expected_requests()` / `peak_rps()` back the run-size limit `MAX_EXPECTED_REQUESTS`. 3.5: `TrafficPattern.shape` (`flat` default, `ramp`, `diurnal`, `black_friday`) and `shape_peak` (> 1, defaults in `DEFAULT_SHAPE_PEAK`) bend the base rate over the traffic window (`shape_multiplier`); `base_rps` is the quiet rate; a peak on flat, or a shape with exponential growth, is refused; `rate_at(t)` is the public rate law. |
 | `topology.py` | 11 | **Live SimPy wrappers.** `Component` (owns the `simpy.Resource`, `apply_capacity_drop`, `apply_latency_spike`, `apply_hit_rate_drop`, `draw_service_time`) and `Topology` (the graph: `component()`, `outgoing_edges()`, `cache()`). `set_capacity` hands freed slots to the waiting queue itself: SimPy only re-checks a queue on an arrival or a release. A capacity drop rounds the *removed* slots half up (half of 3 leaves 1). `Topology.choose()` picks among grouped edges. Open for: anything about live capacity or service time. |
-| `engine.py` | 11 | **`CloudSimulator`** — owns `simpy.Environment`, `serve_request()`, `_walk()` (the DAG traversal, cache hit/miss, fan-out probabilities), `_use_component()` (acquire/timeout/retry/release). `run(suggest=True)` attaches `summary["suggestions"]` and `summary["fix_outcome"]` from `rightsize.plan_fix` after `summary()` (it has the node configs; `MetricsCollector.summary()` alone carries neither key). Verification re-runs use `suggest=False`. `CloudSimulator.seed` is always an int (drawn when the config has none), and the plan verifies on it. Open for: how a request moves through the graph. |
-| `traffic.py` | 4 | Poisson arrivals following the configured profile, exact across rate changes (a gap never crosses a spike edge; exponential growth is inverted, not stepped). A constant rate draws what it always drew. Small, read it whole. |
-| `chaos.py` | 4 | The three injectors: `component_failure`, `network_latency`, `cache_outage` (hits the cache its `target` names, else the first). Small, read it whole. |
-| `metrics.py` | 16 | `RequestRecord`, `UtilizationSample`, `MetricsCollector`. **`summary()` and `timeseries()` are the contract above.** Every arrival is accounted for: `record_arrival` + `settle_unfinished` record a request still in the system at the horizon and already past the SLA budget as failed (`unfinished_requests`, `overdue_requests`), and a failed request never counts as SLA-met. The provisioned cost base bills the *configured* capacity (an outage is not a discount). `component_sizing` also carries the exact `waited_requests` and `peak_in_use`. Open for: adding a metric. |
+| `engine.py` | 11 | **`CloudSimulator`** — owns `simpy.Environment`, `serve_request()`, `_walk()` (the DAG traversal, cache hit/miss, fan-out probabilities), `_use_component()` (acquire/timeout/retry/release). `run(suggest=True)` attaches `summary["suggestions"]` and `summary["fix_outcome"]` from `rightsize.plan_fix` after `summary()` (it has the node configs; `MetricsCollector.summary()` alone carries neither key). Verification re-runs use `suggest=False`. `run(suggest=False)` then `attach_fix_plan(summary)` is `run()`: the verdict can be shown while the plan is verified (the plan is the slow part, up to ~37 s on 20 nodes; the simulation takes ~0.1 s). `CloudSimulator.seed` is always an int (drawn when the config has none), and the plan verifies on it. `CloudSimulator(config, event_sink=...)` (3.1) receives each tick and each chaos window opening/closing (`{"type": "chaos", "t", "phase", "event_type", "node", "intensity"}`) as it happens; it observes only, the run is the same with or without it. Open for: how a request moves through the graph. |
+| `traffic.py` | 5 | Poisson arrivals following the configured profile, exact across rate changes (a gap never crosses a spike edge; exponential growth is inverted, not stepped; a shaped day is sampled by thinning under its peak rate). A constant rate draws what it always drew. The rate law is `TrafficPattern.rate_at`. Small, read it whole. |
+| `chaos.py` | 5 | The three injectors: `component_failure`, `network_latency`, `cache_outage` (hits the cache its `target` names, else the first). Each reports through an optional `notify(phase, node)` after it applies and after it releases (`node` None for a latency spike). Small, read it whole. |
+| `feed.py` | 5 | **The event feed (3.1).** Pure: `Narrator().read(event)` / `narrate(events)` turn ticks and chaos events into lines `{t, kind, severity, node, text}` ("db at 97%", "3 retries on db", "component failure on db ended"). `SATURATED_AT` 0.9, `RECOVERED_BELOW` 0.75 (said once, with hysteresis). Clients print `text` as is. |
+| `metrics.py` | 16 | `RequestRecord`, `UtilizationSample`, `MetricsCollector`. **`summary()` and `timeseries()` are the contract above.** Every arrival is accounted for: `record_arrival` + `settle_unfinished` record a request still in the system at the horizon and already past the SLA budget as failed (`unfinished_requests`, `overdue_requests`), and a failed request never counts as SLA-met. The provisioned cost base bills the *configured* capacity (an outage is not a discount). `component_sizing` also carries the exact `waited_requests` and `peak_in_use`. Each tick is built once, in `sample_utilization`, and `timeseries()` returns copies: besides latency and per-node `utilization`/`queue_length`, a tick has `arrived`/`completed`/`failed` for its window, per-node live `capacity`, `in_use`, `retries`, and `edge_flow[i]` (requests that set off along `config.topology.edges[i]`). Open for: adding a metric. |
 | `score.py` | 18 | Pure functions on `summary()`: `resilience_score`, `cost_grade`, `cost_extrapolation`, `cost_per_completed_request`, `score_headline`, `score_color`, `score_band`, `capped_band` (a crit finding caps the band at "At risk", a warn at "Solid"), `score_explanation` (carries `band_capped_by`). The formula lives once, in `_score_parts`; `cost_grade` grades each node on `verified_status` when present, so `run()` takes the grade again after attaching the labels. |
 | `findings.py` | 21 | Pure functions on `summary()`: `build_findings` → the plain-English "why this score" verdict, `verdict_headline`. Each `Finding` has `id`, `severity`, `text`, `node?` plus optional `title`, `why`, `impact`, `evidence` (`[{label, value}]`), `recommendation`. Each rule is its own `_`-prefixed function with a threshold constant at module top. A node past 90% is one finding (`util_weak_link`), not that plus `undersized`. **Add a finding = add one function + register it.** |
 | `suggestions.py` | 7 | Pure flagging formula: `build_suggestions(nodes, summary)` → `Suggestion` list (`node`, `param`, `current`, `proposed`, `reason`, `est_monthly_delta`). Says *which* nodes look off by mean utilization; it no longer sets the sizes the summary carries. |
 | `rightsize.py` | 14 | **Verified "Fix it".** `plan_fix(config, summary)` → `{suggestions, outcome}`: repair (raise whichever node removes the most crit/warn findings), clear undersized flags, then trim (smallest size that adds no finding, ≤ 0.5 score points below the settled score, repeated until a re-run of the result would offer nothing), all proven by re-simulating on the pinned seed, one run per distinct sizing. The run being explained is the plan's "before", and sizes that would replay the same events (nobody waited for the node) are not simulated. Cost: ~0.1 s on the demo, 5–13 s on the 19-node examples. `FixOutcome` = score/band before → after, `resolved`, `unfixed`. Contract: `tests/test_suggestions.py` (locked). |
 | `profile.py` | 7 | Multi-seed confidence: `resilience_profile` (worst/typical/best), `typical_index`, `timeseries_band` (per-tick P95 min/max across seeds). |
 | `playbooks.py` | 7 | The four named incidents: `db_failover`, `cross_region_latency_spike`, `cache_eviction_storm`, `dependency_timeout_cascade`. Each is a function returning `ChaosEvent`s, targeted **by role**. Open for: adding an incident. |
-| `presets.py` | 12 | AWS/Azure/GCP small-tier component presets. Flat list of factory functions. `cost_per_hour` is per slot: each preset spreads its instance's list price over its slots. |
+| `presets.py` | 12 | AWS/Azure/GCP small-tier component presets. Flat list of factory functions. `cost_per_hour` is per slot: each preset spreads its instance's list price over its slots. 3.5: `TRAFFIC_PRESETS` (`black_friday`, `eu_business_hours`) and `traffic_preset(name, base_rps, duration)`; the CLI's `--traffic NAME` on `run` / `demo` (`cli/sim.py::apply_traffic`). |
 | `compare.py` | 12 | One core, three faces: `run_many`, `diff_runs`, `set_path` (dotted-path patching), `apply_provider`, `sweep`, `knee_point`. Backs `eleven compare multi-cloud|what-if|sweep`. |
 | `importers.py` | 26 | Terraform/YAML/JSON → `SimulationConfig`. `import_architecture()` is the entry; everything else is private estimation tables. An imported load balancer picks one worker per request (edge group `workers`) and reaches the cache only through it. **Open only for import bugs.** |
 | `viz.py` | 8 | Matplotlib report PNG. `render_report`, `render_comparison`. |
@@ -100,7 +101,10 @@ this repo.
 
 No database, no sessions. Each request carries a full config, gets the full
 summary back. `api/schemas.py` reuses `sim_core.SimulationConfig` directly, so
-the API validates by exactly the same rules as the CLI.
+the API validates by exactly the same rules as the CLI. The one exception is
+`/runs` (3.1): a started run is kept in memory, with its events, for 15
+minutes after it finishes (`api/runs.py`); it is the stand-in for Wave 4's
+`runs` table.
 
 - `main.py` — `create_app()`, `/health`, CORS (a local frontend on any port by
   default; `ELEVEN_CORS_ORIGINS` names other origins).
@@ -110,7 +114,21 @@ the API validates by exactly the same rules as the CLI.
   `n_seeds > 1` (then also returns `seeds` / `runs` / `profile` /
   `typical_seed`, and with `include_timeseries` the typical run's
   `timeseries` plus `timeseries_band`). The single-run key set is pinned.
-  `apply_playbook_or_404` is the one playbook lookup every route uses.
+  `apply_playbook_or_404` is the one playbook lookup every route uses;
+  `single_run_body` / `multi_seed_body` build the response, shared with `/runs`.
+  `effective_config(config, playbook, custom_chaos)` (3.3) is the one merge
+  every route that names a run calls (`/simulate`, `/runs`, `/export`):
+  config events, then the playbook's, then up to 8 injected ones, validated
+  again so an unknown node is a one-sentence 422.
+  `SimulateRequest` and `RunRequest` share one base, `RunSpec`.
+- `routes/runs.py` — `POST /runs` (202 `{run_id, events_url}`; validated
+  exactly as `/simulate` first; 429 when the store is full of running runs),
+  `GET /runs/{id}`, `GET /runs/{id}/events`: a server-sent-event stream
+  (`started`, `seed`, `tick`, `chaos`, `feed`, `measured`, `result` | `error`,
+  plus id-less `ping`s). `measured` is the summary before the Fix-it plan;
+  `result` equals `/simulate`'s body. Runs simulate on `app.state.run_pool`
+  (2 threads). `api/runs.py` holds `Run`, `RunStore` and the `sse` generator;
+  `Last-Event-ID` resumes a stream.
 - `routes/export.py` — `GET /export/formats`, `POST /export`
   `{config, format, playbook?}` → the file, named in `Content-Disposition`.
   The API keeps no run, so it simulates the config again: a config without a
@@ -128,11 +146,26 @@ the API validates by exactly the same rules as the CLI.
 - `src/core/api/client.ts` — the only place `fetch` is called. Typed
   `ApiError`, per-call timeouts. `request` reads JSON; `download` reads a
   file as a blob (`api.exportRun`). Both go through `send` and `refusal`,
-  so a failure reads the same from either.
+  so a failure reads the same from either. `api.startRun` / `runEventsUrl` /
+  `runStatus` (3.1) start and name a streamed run; `src/core/api/runStream.ts`
+  `watchRun` reads its `EventSource` (lets the browser reconnect, fails on a
+  stream closed for good or 45 s of silence, closes after `result`/`error`).
 - `src/core/state/RunStateContext.tsx` — the shared run: active config,
   selected playbook, result. **The engine call lives here exactly once;** no
   view owns a fetch. Runs carry a token so a stale response cannot overwrite a
-  newer one.
+  newer one. Since 3.1c a run is `POST /runs` + its event stream, not
+  `/simulate`: `isPending` until `measured` (the verdict is on screen), then
+  `planPending` until `result` (the Fix-it plan, verified), `planError` if it
+  never came. `feed` (`lib/runStream.ts`'s `RunFeed`: ticks, chaos marks,
+  feed lines) is drawn at most every 100 ms. A stream that dies asks
+  `runStatus` once before calling the run failed. 3.3: `customChaos`,
+  `injectFailure(node)` (adds and runs at once), `clearFailure(node)`; every
+  run sends them as `custom_chaos`; `measuredRun.customChaos` is what the run
+  on screen carried (exports send that); a new architecture clears them.
+  The node inspector's "Break it" section injects or removes; the Incident
+  bar shows one removable chip per failure. 3.5b: `setTrafficShape(shape)`
+  changes the active config's traffic only (no run); `TrafficShapePicker` is
+  the "Traffic" row under "Incident".
 - `src/core/state/ThemeContext.tsx` — light/dark via `data-theme` on `<html>`,
   `useSyncExternalStore`. Pre-paint script lives in `src/core/lib/themeStorage.ts`.
 - `src/app/globals.css` — **the only place a colour is written down.** Tokens
@@ -158,7 +191,20 @@ the API validates by exactly the same rules as the CLI.
   cost, the findings that name it, and its pending Fix-it change; opens
   from a topology node's `onOpen`), `ExportMenu` (2.1c: the Export
   button in the page toolbar; it opens the list of formats and downloads
-  the run on screen; a paid format wears a "Pro" badge and is not locked). The verdict's bar, icon, band
+  the run on screen; a paid format wears a "Pro" badge and is not locked),
+  `LiveStage` (3.2: owns the playback clock, a rAF loop, so the page never
+  re-renders per frame; plays a new run from the start, shows a finished run
+  at its end; feeds `TopologyDiagram` a `live` frame that changes once per
+  tick), `EventFeed` (the engine's feed lines up to the clock, verbatim,
+  `role="log"`), `PlaybackBar` (play/pause, speed 1×–20×, clock, LIVE /
+  REPLAY; 3.4: a scrubber with a mark per incident and the first failure,
+  "Jump to where it broke", keys Space / ← → / Home End). 3.4: `LiveStage`
+  reports the tick on screen (`onCursor`) and takes `seekRequest`s;
+  `TimelineChart` draws that `cursor` and seeks on click (`onSeek`).
+  Replay never calls the engine. `TopologyDiagram` with `live`: bar and % are the moment's load in
+  the feed's tones, `q5 1/3` for queue and lost slots, a critical ring while an
+  incident is on the node, request pulses (`animateMotion`) on edges
+  ∝ traffic, paused with playback, none under reduced motion. The verdict's bar, icon, band
   word and gauge share one colour, `format.ts::verdictSeverity` (the worse of
   score and worst finding).
 - `src/core/lib/` — **helpers only, no tests here.** `format.ts` (severity maps
@@ -178,6 +224,22 @@ the API validates by exactly the same rules as the CLI.
   id+node keys for the finding cards), `exports.ts` (2.1c: `exportRequest`
   names the measured run and, in 5-seed mode, its typical seed;
   `exportFilename`, `filenameFromDisposition`, `exportChoices`), `chaos.ts`,
+  `playback.ts` (3.2: the clock — `advance` never passes the newest tick and
+  returns the same object when nothing moves; `seek`, `togglePlay`,
+  `frameIndex`), `liveView.ts` (3.2: `liveFrame`, `activeIncidents`,
+  `withLive` (the diagram's views + the moment), `pulseLevel`,
+  `visibleLines`, `feedTime`; tones at the feed's 0.9 / 0.75),
+  `trafficShape.ts` (3.5b: the engine's curve mirrored — `shapeMultiplier`,
+  `rateAt`, `shapePeak`, `peakRps`, `withShape` (Flat removes both keys, so
+  the demo's traffic block comes back exactly), `shapePath` for previews),
+  `clickToFail.ts` (3.3: `failureEvent` — full outage, 15 s, a third of the
+  way in, once — `withFailure`, `withoutFailure`, `failedNodes`,
+  `failureLabel`), `replay.ts` (3.4: `stepTick`, `replayMarks`, `breakingMoment` — first
+  failure, else first saturation, else first incident — `positionFraction`),
+  `runStream.ts` (3.1c: `parseRunEvent`, `reduceRun` → `RunFeed`,
+  `provisionalResult` (the summary + streamed ticks while the plan is
+  verified), `planPending`), `rerun.ts` (`fixPanelView` also says
+  "verifying" / "unverified"),
   `useThemeTokens.ts`, `useReducedMotion.ts`, `themeStorage.ts`, `demo.ts`
   (the calibrated demo topology — changing its numbers invalidates the
   documented scores).
@@ -190,12 +252,14 @@ the API validates by exactly the same rules as the CLI.
 - Re-runs patch in place: results stay mounted and dim while a run is in
   flight (`.eleven-results[aria-busy]`), the gauge glides old → new, and the
   timeline draws in only for its first data.
-- `tests/` — Vitest unit tests (17 files, 179 tests), one file per module,
+- `tests/` — Vitest unit tests (24 files, 314 tests; `tests/fixtures/runStream.ts`
+  is a hand-written run stream the Wave 3 tests share), one file per module,
   `npm run test:unit`.
 - Routes: `/` simulator, `/incidents`, `/import`, `/compare`, `/presets`.
 - The simulator page (`src/app/page.tsx`) is a dashboard: a sticky toolbar
   (run mode, Export, Run), the incident bar, the tile strip, the topology at
-  full width, then **rows, not independent columns**, so cards side by side
+  full width (3.2: `LiveStage` — the event feed and transport under the
+  diagram, beside it only at `2xl`, since the diagram never shrinks), then **rows, not independent columns**, so cards side by side
   share a height and no hole opens between them: verdict | Fix it (+ changes
   applied), then the timeline (beside confidence in 5-seed mode), then
   sizing. Only cards of similar height are paired; the last card in a cell
@@ -206,7 +270,7 @@ the API validates by exactly the same rules as the CLI.
   `Shell` keeps the sidebar in view and caps the canvas at 1600px. The
   topology never shrinks below its natural size and grows to at most 1.3×.
 
-## `tests/` — pytest, 29 files, ~425 tests
+## `tests/` — pytest, 35 files, 583 tests
 
 Mirrors `sim_core/`: `test_engine.py`, `test_score.py`, `test_findings.py`, …
 The engine-review fixes are pinned one file per rule: `test_accounting.py`
@@ -234,7 +298,11 @@ rich verdict card), 1.3 (verified "Fix it" + change log), 1.3e–1.3g
 (render streamlining), 1.3h (verified sizing labels) and 1.4 (node
 inspector) shipped: Wave 1 is done. Wave 2: 2.1 export center shipped
 (engine 2.1, API + CLI 2.1b, web menu 2.1c). 2.2 paid gating lands with
-Wave 4's auth, so Wave 3 (liveness) is next. Waves 3–6 untouched.
+Wave 4's auth. Wave 3 (liveness) shipped 2026-11-15, all eight cards: event sink + feed (3.1), `/runs` stream (3.1b), the web
+runs through it (3.1c), live view (3.2), replay (3.4), click-to-fail (3.3),
+traffic shapes (3.5, 3.5b). Waves 4–6 untouched. The Wave 3 tests are
+`test_event_sink`, `test_feed`, `test_feed_outage`, `test_api_runs`,
+`test_custom_chaos`, `test_traffic_shapes`.
 
 ## `.agents/` — how the agents coordinate
 

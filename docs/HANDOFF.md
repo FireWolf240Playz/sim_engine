@@ -1,37 +1,37 @@
-# Handoff — 2026-11-14 dashboard balance built on `feat/dashboard-balance`; owner review is left
+# Handoff — 2026-11-15 Wave 3 shipped; pick the next card
 
 ## Task
-Get the owner's verdict on the balanced dashboard, then merge `feat/dashboard-layout` and `feat/dashboard-balance` into `main`.
+Choose and card the next work: a Wave 3 follow-up from the review notes, or Wave 4.
 
 ## Open these files, in this order
-- `web/src/app/page.tsx` — the rows: verdict | Fix it, timeline (+ confidence), sizing
-- `web/src/core/components/FindingCard.tsx` — collapsed row mode (`onToggle`)
-- `web/src/core/components/FixLog.tsx` — `FixHistoryList`'s `limit`
+- `docs/ROADMAP.md` — Wave 4 section (accounts, history, share)
+- `api/runs.py` — the in-memory run store Wave 4's `runs` table replaces
+- `web/src/core/state/RunStateContext.tsx` — the one place a run starts
 
 ## Done
-- Rows instead of independent columns: no hole between cards (`web/src/app/page.tsx`)
-- Findings collapse to one-line rows; the modal and inspector keep full cards (`FindingCard.tsx`, `VerdictPanel.tsx`)
-- Change log shows the latest two, with "show N earlier changes" (`FixLog.tsx`)
-- `Panel` takes `className` so a card can fill its row (`web/src/components/Panel.tsx`)
+- Wave 3, all eight cards, committed and pushed; roadmap marks 3.1–3.5 ✅
+- Settings-changed hint: the page says when the incident, traffic or injected failures differ from the run on screen (`web/src/app/page.tsx`)
 
 ## Next
-1. Owner: look at `/` after a few incident runs and applies; say what to change, then commit and merge
-2. Card author: verdict at 1280 is 407px wide; consider a container query that stacks the gauge over the headline
-3. Card author: measure and prototype Wave 3 (replay from `timeseries` first, streaming after)
+1. Card candidate: cancel an abandoned run's plan (run-again doubles the wait; `/runs` has no cancel)
+2. Card candidate: dim the diagram's sizing words while the plan verifies
+3. Then card Wave 4 from the roadmap
 
 ## Do not touch
-- Every `tests/test_*.py` and `web/tests/*.test.ts` — locked contracts
+- Every `tests/test_*.py`, `web/tests/*.test.ts`, `web/tests/fixtures/` — locked contracts
 - `web/src/core/lib/demo.ts` — calibrated demo numbers
-- git: the executor makes no commits, branches or `git add`
+- `.env`; git: no assistant names in commits or trailers
 
 ## Constraints discovered
-- Most blank space inside any card, measured: 38px (was a 356px hole); opening a finding grows the verdict, and its neighbour stretches to match
-- `.eleven-results` dims its direct children during a run; the topology wrapper is `.eleven-live` and must stay a direct child
-- A full-page headless screenshot can leave the Recharts chart blank; a viewport capture scrolled to it shows it drawn
-- Tile colours come from findings (`sla_breach`, `p95_headroom`): do not add thresholds in the frontend
+- Restart the API after pulling: an older engine refuses `traffic.shape` and `custom_chaos` (422)
+- Headless Chrome reports `prefers-reduced-motion: reduce`: force `no-preference` to see pulses
+- `topologyView.ts` may export only `nodeViews` (locked test); live helpers live in `liveView.ts`
+- The feed sits beside the diagram only at `2xl`: the diagram never shrinks
+- Recorded `requests` exclude what is still in flight at the horizon; count arrivals as `requests + unfinished − overdue`
+- pytest prints no summary line here: trust the exit code (583 dots, exit 0)
 
 ## Verify with
 ```
-cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..   # 179/179, no errors
-& .\venv\Scripts\python.exe -m pytest -q -rs   # exit 0, no skips
+& .\venv\Scripts\python.exe -m pytest -q -rs   # 583 passed, exit 0
+cd web; npm run test:unit; npm run typecheck; npm run lint; cd ..   # 314/314, clean
 ```

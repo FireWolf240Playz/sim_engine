@@ -16,6 +16,10 @@ product/company picture, read [FOUNDER_GUIDE.md](FOUNDER_GUIDE.md).
 > labels ✅) · 1.4 node inspector ✅ · **Wave 1 done.**
 > **2026-11-14:** 2.1 export center ✅. 2.2 tier gating waits for Wave 4's
 > auth. Next up: **Wave 3, 3.1**.
+> **2026-11-15:** Wave 3 is carded (`.agents/tasks/3.*.md`, eight cards with
+> failing tests). Build order: 3.1 → 3.1b → 3.1c → 3.2 → 3.4 → 3.3 → 3.5 → 3.5b.
+> All eight built and shipped the same day: 3.1 ✅ · 3.2 ✅ · 3.3 ✅ · 3.4 ✅ ·
+> 3.5 ✅ · **Wave 3 done.** Next up: Wave 4 (accounts, history, share).
 
 ## 0. Current state (verified, as of 2026-10-04)
 
@@ -237,7 +241,22 @@ Goal: "the data is the gold" — export is the paid hook.
 Goal: "watch the attack happen" instead of form → wait → report.
 This wave doubles as the demo; the founder records the pitch video from it.
 
-### 3.1 SSE run streaming (infrastructure — build first)
+> **Measured when the cards were written (2026-11-15); where this differs
+> from the text below, the cards win.**
+> - 3.1: the run is not "one 20s blocking request". The simulation takes
+>   0.02–0.10 s; the wait is the Fix-it plan (0.4 s on 6 nodes, 24–37 s on
+>   20). So the stream sends the verdict first (`measured`, 0.7 s on the
+>   20-node example) and the verified plan when it is ready (`result`, 27 s).
+>   No `sse-starlette`: a plain `StreamingResponse` is enough.
+> - 3.2: 60 ticks reach the browser in under 0.3 s, so "live" is a playback
+>   clock over the ticks held (about 12 s per run), never past the newest tick.
+> - 3.4: no backend work. Card 3.1 puts what replay needs into every tick,
+>   and replay is 3.2's playback with a scrubber.
+> - 3.3: `custom_chaos` is also accepted by `/runs` and `/export`.
+> - 3.5: `base_rps` is the quiet rate and one number, `shape_peak`, says how
+>   much busier the peak is; the CLI gets `--traffic NAME`.
+
+### 3.1 SSE run streaming (infrastructure — build first) — ✅ shipped (2026-11-15: event sink, `sim_core/feed.py`, `POST /runs` + SSE, the web runs through it)
 - **Why:** one 20s blocking request today; liveness needs a pipe.
 - **BE shape:** engine hook — `CloudSimulator` gains an optional
   `event_sink: Callable[[dict], None]` called on each metrics tick
@@ -252,7 +271,7 @@ This wave doubles as the demo; the founder records the pitch video from it.
 - **Accept:** `curl -N` shows ticks streaming then the final result;
   existing `/simulate` tests untouched and green.
 
-### 3.2 Live run view — mission control (THE headline feature)
+### 3.2 Live run view — mission control (THE headline feature) — ✅ shipped (2026-11-15: `LiveStage`, `EventFeed`, `PlaybackBar`, live diagram)
 - **Why:** the single most "alive" thing we can show a prospect.
 - **FE:** while a run executes: request pulses flowing along edges (rate ∝
   traffic), node util bars animating from the tick stream, the incident
@@ -265,7 +284,7 @@ This wave doubles as the demo; the founder records the pitch video from it.
   matches the engine's emitted events exactly (assert in a component test
   with a mocked SSE stream).
 
-### 3.3 Click-to-fail (cheap add-on to 3.1/3.2)
+### 3.3 Click-to-fail (cheap add-on to 3.1/3.2) — ✅ shipped (2026-11-15: `custom_chaos`, inspector "Break it")
 - **Why:** interactive demo — pick the prospect's weakest box, break it.
 - **BE:** `ChaosEvent.target` already exists (Phase 1). Add a UI-chaos
   builder in the API: `POST /simulate` body accepts
@@ -277,7 +296,7 @@ This wave doubles as the demo; the founder records the pitch video from it.
   live capacity in-window (reuse the Phase 1 live-state test pattern);
   unknown node → clean 422.
 
-### 3.4 Timeline replay
+### 3.4 Timeline replay — ✅ shipped (2026-11-15: scrubber, incident marks, "Jump to where it broke")
 - **Why:** "here, at second 63, is exactly where it broke" — point at a
   moment in a finished run.
 - **BE:** the ticks are already the 2 s `UtilizationSample`s; expose them
@@ -291,7 +310,7 @@ This wave doubles as the demo; the founder records the pitch video from it.
   elevated util; play/pause works; no re-simulation happens (network tab:
   zero POSTs).
 
-### 3.5 Real traffic shapes
+### 3.5 Real traffic shapes — ✅ shipped (2026-11-15: shapes + `--traffic`, the Traffic picker)
 - **Why:** "we simulated your Black Friday" — GTM vocabulary.
 - **BE:** extend `TrafficPattern` (config.py, Pydantic-validated):
   `shape: "flat"|"diurnal"|"ramp"|"black_friday"` + params
