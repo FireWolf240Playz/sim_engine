@@ -53,6 +53,7 @@ from sim_core.config import (
     ComponentConfig,
     DatabaseConfig,
     LoadBalancerConfig,
+    TrafficPattern,
 )
 
 _ConfigT = TypeVar("_ConfigT", bound=ComponentConfig)
@@ -344,3 +345,31 @@ PRESETS: Dict[str, PresetFactory] = {
     "gcp_memorystore": gcp_memorystore,
     "gcp_cloud_sql_small": gcp_cloud_sql_small,
 }
+
+
+# ---------------------------------------------------------------------------
+# Traffic presets (roadmap 3.5): a named day, laid over any base rate.
+# ---------------------------------------------------------------------------
+
+#: Named days: the shape and its peak (how many times ``base_rps``).
+TRAFFIC_PRESETS: dict[str, dict[str, Any]] = {
+    # A normal day, then a surge to five times the rate.
+    "black_friday": {"shape": "black_friday", "shape_peak": 5.0},
+    # Quiet at both ends of the window, three times busier at midday.
+    "eu_business_hours": {"shape": "diurnal", "shape_peak": 3.0},
+}
+
+
+def traffic_preset(
+    name: str, base_rps: float, duration: float, start_time: float = 0.0
+) -> TrafficPattern:
+    """The named day at ``base_rps`` (its quiet rate) over ``duration`` seconds.
+
+    An unknown name raises :class:`KeyError` naming the days that exist.
+    """
+    if name not in TRAFFIC_PRESETS:
+        raise KeyError(f"unknown traffic preset {name!r}; known: {sorted(TRAFFIC_PRESETS)}")
+    window: dict[str, Any] = {"base_rps": base_rps, "duration": duration}
+    if start_time:
+        window["start_time"] = start_time
+    return TrafficPattern(**window, **TRAFFIC_PRESETS[name])

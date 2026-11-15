@@ -19,12 +19,18 @@ and each stretch is sampled exactly:
 
 A constant rate with no spike has no breakpoint: it draws the same values in
 the same order as it always did.
+
+A shaped pattern (``ramp``, ``diurnal``, ``black_friday``, roadmap 3.5) has a
+rate that bends continuously, and ``sin^2`` has no closed-form inverse, so
+it is sampled by *thinning*: candidates arrive at the curve's highest rate
+and each is kept with probability ``rate(t) / highest``. That is exact for
+any bounded rate. Inside a spike the constant-rate path applies as before.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Callable, Generator
+from collections.abc import Callable, Generator
 
 import numpy as np
 import simpy
@@ -33,7 +39,7 @@ from sim_core.config import PatternType, TrafficPattern
 
 # A factory that, given a unique id, returns a request-process generator to
 # be scheduled on the environment (e.g. ``CloudSimulator.serve_request``).
-RequestFactory = Callable[[str], Generator[object, None, None]]
+RequestFactory = Callable[[str], Generator[object]]
 
 
 def _in_spike(pattern: TrafficPattern, t: float) -> bool:
@@ -49,20 +55,11 @@ def _in_spike(pattern: TrafficPattern, t: float) -> bool:
 def _target_rps(pattern: TrafficPattern, t: float) -> float:
     """Return the target arrival rate (requests/second) at time ``t``.
 
-    Returns ``0.0`` before the traffic window opens.
+    Returns ``0.0`` outside the traffic window. The rate law itself lives on
+    the config (:meth:`TrafficPattern.rate_at`), so the run-size limit and
+    the sampler read one definition.
     """
-    if t < pattern.start_time:
-        return 0.0
-
-    # A spike window (when configured) overrides the base rate while active.
-    if _in_spike(pattern, t):
-        assert pattern.spike_rps is not None
-        return pattern.spike_rps
-
-    if pattern.pattern_type is PatternType.EXPONENTIAL:
-        elapsed = t - pattern.start_time
-        return pattern.base_rps * float(2.0 ** (elapsed / pattern.growth_period))
-    return pattern.base_rps
+    return pattern.rate_at(t)
 
 
 def _breakpoints(pattern: TrafficPattern, end: float) -> list[float]:
@@ -94,7 +91,7 @@ def generate_traffic(
     pattern: TrafficPattern,
     new_request: RequestFactory,
     rng: np.random.Generator,
-) -> Generator[object, None, None]:
+) -> Generator[object]:
     """Emit one request per Poisson arrival for the configured window.
 
     ``new_request`` is called with a unique id and must return a process
@@ -107,17 +104,22 @@ def generate_traffic(
     if pattern.start_time > 0:
         yield env.timeout(pattern.start_time)
 
+    # A shaped curve never rises above this: the thinning envelope.
+    ceiling = pattern.base_rps * pattern.peak_multiplier
     counter = 0
     while env.now < end:
         now = env.now
         # The rate law in force at ``now`` holds until here.
         boundary = next((t for t in breakpoints if t > now), end)
-        gap = _next_gap(pattern, now, rng)
+        thinned = pattern.shape != "flat" and not _in_spike(pattern, now)
+        gap = float(rng.exponential(1.0 / ceiling)) if thinned else _next_gap(pattern, now, rng)
         if now + gap >= boundary:
             # No arrival before the law changes (or the window closes).
             yield env.timeout(boundary - now)
             continue
         yield env.timeout(gap)
+        if thinned and float(rng.random()) * ceiling >= pattern.rate_at(env.now):
+            continue  # a candidate the curve does not keep at this moment
         request_id = f"req-{counter}"
         counter += 1
         env.process(new_request(request_id))

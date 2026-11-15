@@ -9,6 +9,7 @@ metrics), so each concern stays in one place.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, Generator, List, Optional
 
 import numpy as np
@@ -43,11 +44,29 @@ class ComponentTimeoutError(RuntimeError):
         )
 
 
-class CloudSimulator:
-    """Runs a pre-deployment cloud-resilience simulation."""
+#: Receives the run's events as they happen (roadmap 3.1): one ``tick`` per
+#: metrics sample and one ``chaos`` event per disruption opening or closing.
+EventSink = Callable[[dict[str, Any]], None]
 
-    def __init__(self, config: SimulationConfig) -> None:
+
+class CloudSimulator:
+    """Runs a pre-deployment cloud-resilience simulation.
+
+    ``event_sink`` (optional) watches the run. It is called synchronously, in
+    simulated-time order, with plain-JSON dicts::
+
+        {"type": "tick", **tick}            # see MetricsCollector.timeseries()
+        {"type": "chaos", "t": 5.0, "phase": "start" | "end",
+         "event_type": "component_failure", "node": "db" | None, "intensity": 0.5}
+
+    The sink observes only: it draws no random number and schedules nothing,
+    so a watched run and an unwatched run of the same seed are the same run.
+    """
+
+    def __init__(self, config: SimulationConfig, event_sink: EventSink | None = None) -> None:
         self.config = config
+        self._event_sink = event_sink
+        self._ran = False
         self.env = simpy.Environment()
         # Two independent RNG streams from one seed: arrivals get their own
         # stream so the arrival pattern is identical across scenarios - only
@@ -65,7 +84,16 @@ class CloudSimulator:
         )
         self._arrival_rng, self.rng = np.random.default_rng(self.seed).spawn(2)
         self.topology = Topology(self.env, config.topology)
-        self.collector = MetricsCollector(self.topology, sla_target=config.sla_target)
+        self.collector = MetricsCollector(
+            self.topology,
+            sla_target=config.sla_target,
+            edge_count=len(config.topology.edges),
+        )
+        # The live graph walks the config's own Edge objects, so identity is
+        # an exact key even when two edges join the same pair of nodes.
+        self._edge_index: dict[int, int] = {
+            id(edge): index for index, edge in enumerate(config.topology.edges)
+        }
         self._req_counter = 0
 
     # -- request serving ---------------------------------------------------
@@ -188,6 +216,7 @@ class CloudSimulator:
                     continue
             elif self.rng.random() >= edge.probability:
                 continue  # this branch is not taken for this request
+            self.collector.record_edge(self._edge_index[id(edge)])
             yield from self._walk(
                 edge.target, component_times, cache_hit, retries, on_path | {node_name}
             )
@@ -261,8 +290,33 @@ class CloudSimulator:
     # -- periodic metric sampling -----------------------------------------
     def collect_utilization(self) -> Generator[object, None, None]:
         while True:
-            self.collector.sample_utilization(self.env.now)
+            tick = self.collector.sample_utilization(self.env.now)
+            if self._event_sink is not None:
+                self._event_sink({"type": "tick", **tick})
             yield self.env.timeout(self.config.metrics_interval)
+
+    def _chaos_notifier(self, event: ChaosEvent) -> chaos_mod.Notify | None:
+        """What a chaos handler calls when it applies or releases ``event``;
+        ``None`` (nothing built) when nobody is watching."""
+        sink = self._event_sink
+        if sink is None:
+            return None
+        event_type = event.event_type.value
+        intensity = float(event.intensity)
+
+        def notify(phase: str, node: str | None) -> None:
+            sink(
+                {
+                    "type": "chaos",
+                    "t": float(self.env.now),
+                    "phase": phase,
+                    "event_type": event_type,
+                    "node": node,
+                    "intensity": intensity,
+                }
+            )
+
+        return notify
 
     # -- orchestration -----------------------------------------------------
     def _spawn_processes(self) -> None:
@@ -270,7 +324,9 @@ class CloudSimulator:
         env = self.env
         env.process(generate_traffic(env, self.config.traffic, self.serve_request, self._arrival_rng))
         for event in self.config.chaos:
-            env.process(chaos_mod.inject(env, self.topology, event, self.rng))
+            env.process(
+                chaos_mod.inject(env, self.topology, event, self.rng, self._chaos_notifier(event))
+            )
         env.process(self.collect_utilization())
 
     def run(self, *, suggest: bool = True) -> Dict[str, Any]:
@@ -286,35 +342,53 @@ class CloudSimulator:
         Riding inside the summary means the CLI, the API and every multi-seed
         run get it with no API shape change. Verification re-runs the engine
         with ``suggest=False``, which is also what stops it recursing.
+
+        ``run(suggest=False)`` followed by :meth:`attach_fix_plan` is the same
+        as ``run()``: a caller can show the verdict while the plan is verified.
         """
         self._spawn_processes()
         self.env.run(until=self.config.duration)
         self.collector.settle_unfinished(self.config.duration)
         self.collector.settle_cost(self.config.duration)
         summary = self.collector.summary()
+        self._ran = True
         if suggest:
-            # local: rightsize imports this module
-            from sim_core.rightsize import plan_fix, verified_sizing
+            self.attach_fix_plan(summary)
+        return summary
 
-            # On this run's own seed, so the plan's "before" is this summary.
-            plan = plan_fix(self.config.model_copy(update={"seed": self.seed}), summary)
-            summary["suggestions"] = plan["suggestions"]
-            # Before → after of applying every suggestion, from the same
-            # verification runs: what "Fix it" will do, and what it can't.
-            summary["fix_outcome"] = plan["outcome"]
-            # The sizing label, per node: the verified answer, so the table,
-            # the diagram and the CLI never say something else.
-            labels = verified_sizing(self.config, plan["suggestions"])
-            sizing = summary.get("component_sizing")
-            if isinstance(sizing, dict):
-                for node, (status, capacity) in labels.items():
-                    info = sizing.get(node)
-                    if isinstance(info, dict):
-                        info["verified_status"] = status
-                        info["verified_capacity"] = capacity
-            # The grade reads those labels, so it is taken again now that
-            # they exist: the grade and the sizing table say the same thing.
-            summary["cost_grade"] = cost_grade(summary)
+    def attach_fix_plan(self, summary: dict[str, Any]) -> dict[str, Any]:
+        """Verify the Fix-it plan for this run and attach it to ``summary``.
+
+        Adds ``suggestions``, ``fix_outcome`` and each node's verified sizing
+        label, and grades the cost again on those labels. Mutates and returns
+        ``summary``, which must be this simulator's own ``run(suggest=False)``.
+        This is the slow part of a run (seconds on large topologies; the
+        simulation itself takes a fraction of one).
+        """
+        if not self._ran:
+            raise RuntimeError("attach_fix_plan needs the run first: call run(suggest=False)")
+        # local: rightsize imports this module
+        from sim_core.rightsize import plan_fix, verified_sizing
+
+        # On this run's own seed, so the plan's "before" is this summary.
+        plan = plan_fix(self.config.model_copy(update={"seed": self.seed}), summary)
+        summary["suggestions"] = plan["suggestions"]
+        # Before → after of applying every suggestion, from the same
+        # verification runs: what "Fix it" will do, and what it can't.
+        summary["fix_outcome"] = plan["outcome"]
+        # The sizing label, per node: the verified answer, so the table,
+        # the diagram and the CLI never say something else.
+        labels = verified_sizing(self.config, plan["suggestions"])
+        sizing = summary.get("component_sizing")
+        if isinstance(sizing, dict):
+            for node, (status, capacity) in labels.items():
+                info = sizing.get(node)
+                if isinstance(info, dict):
+                    info["verified_status"] = status
+                    info["verified_capacity"] = capacity
+        # The grade reads those labels, so it is taken again now that
+        # they exist: the grade and the sizing table say the same thing.
+        summary["cost_grade"] = cost_grade(summary)
         return summary
 
     # -- convenience -------------------------------------------------------

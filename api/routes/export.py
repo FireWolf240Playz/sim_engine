@@ -17,7 +17,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Response
 
 from api.limits import check_budget
-from api.routes.simulate import apply_playbook_or_404
+from api.routes.simulate import effective_config
 from api.schemas import ExportFormatsResponse, ExportRequest
 from sim_core import CloudSimulator
 from sim_core.exports import EXPORT_FORMATS, render_export
@@ -59,7 +59,7 @@ def export(payload: ExportRequest) -> Response:
     The exported config is the one that ran, playbook events included, so the
     file replays as it is.
     """
-    config = apply_playbook_or_404(payload.config, payload.playbook)
+    config = effective_config(payload.config, payload.playbook, payload.custom_chaos)
     if config.seed is None:
         raise HTTPException(
             status_code=422,

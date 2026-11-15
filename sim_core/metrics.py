@@ -6,6 +6,7 @@ accumulated across the whole run - never from a single data point.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -63,6 +64,7 @@ class MetricsCollector:
         self,
         topology: Topology,
         sla_target: Optional[float] = None,
+        edge_count: int = 0,
     ) -> None:
         self._topology = topology
         #: SLA target (seconds) from the config, surfaced in ``summary()`` so
@@ -100,11 +102,29 @@ class MetricsCollector:
         #: were already past their budget (those are recorded as failed).
         self.unfinished: int = 0
         self.overdue: int = 0
+        #: The ticks, built once at each sample (see :meth:`sample_utilization`)
+        #: and returned by :meth:`timeseries`: what a watcher was sent and what
+        #: the finished run reports are the same objects' copies.
+        self._ticks: list[dict[str, Any]] = []
+        #: Where the previous tick's window ended: an index into ``requests``,
+        #: the arrivals so far, and each node's retries so far.
+        self._tick_cursor = 0
+        self._arrivals = 0
+        self._arrivals_at_tick = 0
+        self._retries_at_tick: dict[str, int] = {}
+        #: Requests that set off along ``config.topology.edges[i]`` since the
+        #: previous tick.
+        self._edge_flow: list[int] = [0] * edge_count
 
     # -- recording ---------------------------------------------------------
     def record_arrival(self, request_id: str, start: float) -> None:
         """Note that a request entered the system at ``start``."""
         self._open[request_id] = start
+        self._arrivals += 1
+
+    def record_edge(self, index: int) -> None:
+        """Count one request setting off along edge ``index`` of the config."""
+        self._edge_flow[index] += 1
 
     def record_request(self, record: RequestRecord) -> None:
         self._open.pop(record.request_id, None)
@@ -212,7 +232,13 @@ class MetricsCollector:
         """Total timeout retries across all components this run."""
         return sum(self.retry_counts.values())
 
-    def sample_utilization(self, env_now: float) -> None:
+    def sample_utilization(self, env_now: float) -> dict[str, Any]:
+        """Take one sample and build its tick; returns a copy of the tick.
+
+        The tick's counts cover the window since the previous sample:
+        requests are recorded at completion, in event order, so the records
+        appended since then are exactly the ones that ended inside it.
+        """
         self._accumulate_cost(env_now)
         per: Dict[str, Dict[str, float]] = {}
         for comp in self._topology.components:
@@ -223,6 +249,43 @@ class MetricsCollector:
                 "utilization": comp.utilization,
             }
         self.utilization.append(UtilizationSample(time=env_now, per_component=per))
+
+        window = self.requests[self._tick_cursor :]
+        self._tick_cursor = len(self.requests)
+        tick: dict[str, Any] = {
+            "time": float(env_now),
+            "p50_latency": None,
+            "p95_latency": None,
+            "sla_met": None,
+            "arrived": self._arrivals - self._arrivals_at_tick,
+            "completed": sum(1 for record in window if record.success),
+            "failed": sum(1 for record in window if not record.success),
+            "per_component": {
+                name: {
+                    "utilization": metrics["utilization"],
+                    "queue_length": metrics["queue_length"],
+                    "capacity": int(metrics["capacity"]),
+                    "in_use": int(metrics["in_use"]),
+                    "retries": self.retry_counts.get(name, 0)
+                    - self._retries_at_tick.get(name, 0),
+                }
+                for name, metrics in per.items()
+            },
+            "edge_flow": list(self._edge_flow),
+        }
+        if window:
+            # No percentile from nothing: a window with no completed request
+            # keeps None so a chart gaps honestly instead of drawing a zero.
+            latencies = np.array([record.latency for record in window], dtype=float)
+            tick["p50_latency"] = float(np.percentile(latencies, 50))
+            tick["p95_latency"] = float(np.percentile(latencies, 95))
+            tick["sla_met"] = sum(1 for record in window if record.sla_met) / len(window)
+
+        self._arrivals_at_tick = self._arrivals
+        self._retries_at_tick = dict(self.retry_counts)
+        self._edge_flow = [0] * len(self._edge_flow)
+        self._ticks.append(tick)
+        return copy.deepcopy(tick)
 
     # -- sizing analysis ----------------------------------------------------
     @staticmethod
@@ -449,51 +512,32 @@ class MetricsCollector:
         return result
 
     def timeseries(self) -> List[Dict[str, Any]]:
-        """Per-tick timeline for the frontend (pure aggregation, no simulation).
+        """Per-tick timeline for the frontend (pure, no simulation).
 
-        One entry per :meth:`sample_utilization` tick, in time order.
-        Latency percentiles are computed over the requests that *completed
-        inside that tick's window* — requests are recorded at completion in
-        event order, so their end-times are non-decreasing and a running
-        pointer is exact. Windows with no completed request carry ``None``
-        percentiles so a chart can gap honestly instead of drawing a fake
-        zero (mirrors the :mod:`sim_core.metrics` no-single-point rule).
+        One entry per :meth:`sample_utilization` tick, in time order: copies
+        of the ticks built as the run went, the same ones a watcher was sent
+        (roadmap 3.1). Latency percentiles cover the requests that completed
+        inside the tick's window, and a window with none carries ``None``.
 
         Shape::
 
             {
               "time": 4.0,
               "p50_latency": 1.8, "p95_latency": 3.1, "sla_met": 0.9,
-              "per_component": {"worker": {"utilization": 0.7, "queue_length": 2.0}},
+              "arrived": 9, "completed": 7, "failed": 1,
+              "per_component": {"worker": {
+                  "utilization": 0.7, "queue_length": 2.0,
+                  "capacity": 6, "in_use": 4, "retries": 0}},
+              "edge_flow": [9, 9, 4],
             }
+
+        ``arrived`` / ``completed`` / ``failed`` and each node's ``retries``
+        count the window that ends at the tick; ``capacity`` and ``in_use``
+        are the node's live slots at the tick (lower during an outage);
+        ``edge_flow[i]`` counts the requests that set off along
+        ``config.topology.edges[i]`` in the window.
         """
-        ticks: List[Dict[str, Any]] = []
-        cursor = 0
-        for sample in self.utilization:
-            window: List[RequestRecord] = []
-            while cursor < len(self.requests) and self.requests[cursor].end <= sample.time:
-                window.append(self.requests[cursor])
-                cursor += 1
-            entry: Dict[str, Any] = {
-                "time": sample.time,
-                "p50_latency": None,
-                "p95_latency": None,
-                "sla_met": None,
-                "per_component": {
-                    name: {
-                        "utilization": metrics["utilization"],
-                        "queue_length": metrics["queue_length"],
-                    }
-                    for name, metrics in sample.per_component.items()
-                },
-            }
-            if window:
-                latencies = np.array([record.latency for record in window], dtype=float)
-                entry["p50_latency"] = float(np.percentile(latencies, 50))
-                entry["p95_latency"] = float(np.percentile(latencies, 95))
-                entry["sla_met"] = sum(1 for record in window if record.sla_met) / len(window)
-            ticks.append(entry)
-        return ticks
+        return copy.deepcopy(self._ticks)
 
     def requests_df(self) -> pd.DataFrame:
         """One row per recorded request, with per-component latency breakdowns."""

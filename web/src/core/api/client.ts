@@ -8,6 +8,9 @@ import type {
   ImportResponse,
   PlaybookListResponse,
   PresetListResponse,
+  RunRequest,
+  RunStartedResponse,
+  RunStatusResponse,
   SimulateResponse,
   SimulationConfig,
 } from "../types";
@@ -154,6 +157,26 @@ export const api = {
       },
       TIMEOUT_MS.run,
     ),
+
+  /**
+   * 3.1 — start a run and get its id at once; watch it with `watchRun` on
+   * `runEventsUrl(run_id)`. The engine checks the request before it starts
+   * anything, so a refusal (unknown playbook, too large) is thrown here, as
+   * the same `ApiError` `/simulate` would give.
+   */
+  startRun: (body: RunRequest) =>
+    request<RunStartedResponse>(
+      "/runs",
+      { method: "POST", body: JSON.stringify(body) },
+      TIMEOUT_MS.quick,
+    ),
+
+  /** The run's event stream, for an `EventSource`. */
+  runEventsUrl: (runId: string) => `${API_BASE}/runs/${encodeURIComponent(runId)}/events`,
+
+  /** The run without a stream: its status, and its result once done. */
+  runStatus: (runId: string) =>
+    request<RunStatusResponse>(`/runs/${encodeURIComponent(runId)}`),
 
   /** Multi-cloud / what-if / sweep — baseline-relative diff out. */
   compare: (payload: CompareRequest) =>

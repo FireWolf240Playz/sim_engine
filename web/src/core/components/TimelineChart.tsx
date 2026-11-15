@@ -57,6 +57,10 @@ interface Props {
   band?: TimelineBandTick[] | null;
   /** How many seeds the band spans (legend text). */
   seedCount?: number;
+  /** 3.4: the moment the live view shows, drawn as a vertical line. */
+  cursor?: number | null;
+  /** 3.4: a click on the plot moves the live view to that moment. */
+  onSeek?: (time: number) => void;
 }
 
 function fmtTooltip(value: unknown): string {
@@ -77,7 +81,16 @@ function fmtTooltip(value: unknown): string {
  * its own; the fixed-height wrapper means the one frame before the
  * tokens resolve costs no layout shift.
  */
-export function TimelineChart({ ticks, slaTarget, windows, horizon, band, seedCount }: Props) {
+export function TimelineChart({
+  ticks,
+  slaTarget,
+  windows,
+  horizon,
+  band,
+  seedCount,
+  cursor = null,
+  onSeek,
+}: Props) {
   const reducedMotion = usePrefersReducedMotion();
   const tokens = useThemeTokens();
   // Draw-in only for the data the chart mounted with: a re-run updates the
@@ -124,10 +137,27 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon, band, seedCo
         ) : null}
       </div>
 
-      <div className="w-full" style={{ height: CHART_H }}>
+      {/* Recharts makes the plot focusable: a ring for the keyboard, none
+          left behind by a click (3.4 seeks on click). */}
+      <div
+        className="w-full [&_svg:focus]:outline-none [&_svg:focus-visible]:outline-2 [&_svg:focus-visible]:outline-accent"
+        style={{ height: CHART_H }}
+      >
         {tokens ? (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 16, right: 12, bottom: 0, left: 0 }}>
+            <ComposedChart
+              data={data}
+              margin={{ top: 16, right: 12, bottom: 0, left: 0 }}
+              onClick={
+                onSeek
+                  ? (state: { activeLabel?: unknown } | null) => {
+                      const time = Number(state?.activeLabel);
+                      if (Number.isFinite(time)) onSeek(time);
+                    }
+                  : undefined
+              }
+              style={onSeek ? { cursor: "pointer" } : undefined}
+            >
               <CartesianGrid
                 vertical={false}
                 stroke={tokens.color["--color-line"]}
@@ -191,6 +221,16 @@ export function TimelineChart({ ticks, slaTarget, windows, horizon, band, seedCo
                   }}
                 />
               ))}
+
+              {cursor !== null ? (
+                // 3.4: the moment the live view is showing.
+                <ReferenceLine
+                  x={cursor}
+                  stroke={tokens.color["--color-accent"]}
+                  strokeWidth={1.5}
+                  ifOverflow="hidden"
+                />
+              ) : null}
 
               {slaTarget ? (
                 <ReferenceLine

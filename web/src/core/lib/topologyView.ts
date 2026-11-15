@@ -9,7 +9,8 @@
  * Pure and dependency-free on purpose: no React, no DOM — Vitest runs it
  * in node.
  */
-import { sizingLabel } from "./format";
+import { sizingLabel, type Severity } from "./format";
+import type { LiveFrame } from "./liveView";
 import type {
   ComponentRole,
   ComponentSizing,
@@ -32,6 +33,18 @@ export interface TopologyDiagramProps {
   /** 1.4: click / Enter / Space opens the node inspector. Must be stable —
    * the diagram is `memo`, so a new function each render would redraw it. */
   onOpen?: (name: string) => void;
+  /**
+   * 3.2: the run at one moment, while it plays. Absent or null: the diagram
+   * shows the run as a whole, as before. Must change only when the frame
+   * does (once per tick), never per animation frame.
+   */
+  live?: LiveFrame | null;
+  /** 3.2: the run's busiest edge in requests per second, the pulse scale. */
+  maxEdgeRate?: number;
+  /** 3.2: playback is paused, so the pulses hold still. */
+  paused?: boolean;
+  /** 3.2: the user prefers reduced motion: no pulses, no flash. */
+  reducedMotion?: boolean;
 }
 
 /**
@@ -58,6 +71,20 @@ export interface NodeViewModel {
    * when it failed. The old size's utilization must not pass as current.
    */
   remeasure: "running" | "unmeasured" | null;
+  /*
+   * 3.2 — present only while the run plays (`liveView.ts::withLive`); `nodeViews` never
+   * sets them. Primitives, so a node whose moment did not change between
+   * two ticks keeps equal props and its memo'd body skips.
+   */
+  /** Load at this moment, 0–1. */
+  liveUtil?: number;
+  liveTone?: Severity;
+  liveQueue?: number;
+  /** Live slots at this moment, and the configured size. */
+  liveCapacity?: number;
+  liveConfigured?: number;
+  /** An incident window is open on this node right now. */
+  liveStruck?: boolean;
 }
 
 /** One view per node, in node order. */

@@ -63,11 +63,18 @@ export function NodeInspector({
   onClose,
   onApply,
   isPending,
+  failure,
 }: {
   inspection: NodeInspection;
   onClose: () => void;
   onApply: (suggestions: Suggestion[]) => void;
   isPending: boolean;
+  /**
+   * 3.3 — "inject failure here". `label` names the node's injected failure
+   * when it has one (`db fails at 20s for 15s`); `onInject` fails the node
+   * and starts a run, `onRemove` takes the failure out without running.
+   */
+  failure?: { label: string | null; preview: string; onInject: () => void; onRemove: () => void };
 }) {
   const { measured, remeasure, findings, fix } = inspection;
   const sev = measured ? sizingSeverity(measured.status) : null;
@@ -131,6 +138,40 @@ export function NodeInspector({
               </p>
             )}
           </section>
+
+          {failure ? (
+            <section>
+              <SectionLabel>Break it</SectionLabel>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sev-crit/30 bg-sev-crit-soft/40 px-3.5 py-3">
+                <p className="min-w-0 text-[13px] leading-5 text-ink">
+                  {failure.label
+                    ? `Injected: ${failure.label}. Every run carries it until you remove it.`
+                    : `A full outage: ${failure.preview}, on top of the incident.`}
+                </p>
+                {failure.label ? (
+                  <button
+                    type="button"
+                    onClick={failure.onRemove}
+                    className="h-8 rounded-lg border border-line bg-surface-1 px-4 text-sm font-medium text-ink outline-none transition-colors hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    Remove the injected failure
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      failure.onInject();
+                      onClose();
+                    }}
+                    disabled={isPending}
+                    className="h-8 rounded-lg bg-sev-crit px-4 text-sm font-semibold text-white shadow-card outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Inject failure here
+                  </button>
+                )}
+              </div>
+            </section>
+          ) : null}
 
           <section>
             <SectionLabel>Cost</SectionLabel>

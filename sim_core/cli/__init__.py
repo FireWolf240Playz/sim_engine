@@ -86,6 +86,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         report_path, json_path = args.report, args.json_path
 
+    traffic_name = getattr(args, "traffic", None)
+    if traffic_name:
+        try:
+            config = sim.apply_traffic(config, traffic_name)
+        except ValueError as exc:  # the run-size limit, worded by the config
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        print(f"Traffic: {traffic_name.replace('_', ' ')} at {config.traffic.base_rps:g} rps quiet")
+
     playbook_name = getattr(args, "playbook", None)
     if playbook_name:
         try:

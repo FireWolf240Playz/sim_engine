@@ -22,12 +22,22 @@ export interface TopologyNode {
   cost_per_hour?: number | null;
 }
 
+/** 3.5: how the base rate bends over the traffic window (`TrafficPattern.shape`). */
+export type TrafficShape = "flat" | "ramp" | "diurnal" | "black_friday";
+
 export interface TrafficConfig {
   base_rps: number;
   duration: number;
+  /** When traffic begins, in seconds (engine default 0). */
+  start_time?: number;
   spike_rps?: number | null;
   spike_start?: number | null;
   spike_duration?: number | null;
+  /** 3.5: absent means flat. `base_rps` is always the quiet rate. */
+  shape?: TrafficShape;
+  /** 3.5: how many times busier the peak is; absent = the shape's default.
+   * The engine refuses it on a flat pattern. */
+  shape_peak?: number | null;
 }
 
 /** Directed, probabilistic request-path edge (see `sim_core.config.Edge`). */
@@ -246,16 +256,112 @@ export interface FixOutcome {
   monthly_delta: number | null;
 }
 
-/** One `timeseries()` tick (see `sim_core/metrics.py::timeseries`). */
+/** One node inside a tick. The last three are sent by every engine since 3.1. */
+export interface TickNode {
+  utilization: number;
+  queue_length: number;
+  /** Live slots right now: lower than the configured size during an outage. */
+  capacity?: number;
+  in_use?: number;
+  /** Timeout retries on this node in the tick's window. */
+  retries?: number;
+}
+
+/**
+ * One `timeseries()` tick (see `sim_core/metrics.py::timeseries`). The same
+ * object is a `tick` event of the run stream (3.1): the stream and the
+ * finished run cannot disagree. The counts are for the window that ends at
+ * `time`; they are optional here only because older fixtures lack them.
+ */
 export interface TimelineTick {
   time: number;
   p50_latency: number | null;
   p95_latency: number | null;
   sla_met: number | null;
-  per_component: Record<
-    string,
-    { utilization: number; queue_length: number }
-  >;
+  arrived?: number;
+  completed?: number;
+  failed?: number;
+  per_component: Record<string, TickNode>;
+  /** Requests that set off along `config.topology.edges[i]` in the window. */
+  edge_flow?: number[];
+}
+
+/* ------------------------------------------------------------------ */
+/* 3.1 — the run stream (`POST /runs`, `GET /runs/{id}/events`)        */
+/* ------------------------------------------------------------------ */
+
+/** Body of `POST /runs`; the same fields `/simulate` takes. */
+export interface RunRequest {
+  config: SimulationConfig;
+  playbook: string | null;
+  n_seeds?: number;
+  /** 3.3: failures the user injected by clicking nodes. */
+  custom_chaos?: ChaosEventCfg[];
+}
+
+export interface RunStartedResponse {
+  run_id: string;
+  events_url: string;
+}
+
+/** `started`: what is running. `seeds` is null for a single run. */
+export interface RunStarted {
+  run_id: string;
+  seed: number;
+  seeds: number[] | null;
+  duration: number;
+  metrics_interval: number;
+  /** The effective schedule: config + playbook + custom chaos. */
+  chaos: ChaosEventCfg[];
+}
+
+/** `chaos`: one window opening or closing, as the engine did it. */
+export interface ChaosMark {
+  t: number;
+  phase: "start" | "end";
+  event_type: ChaosEventType;
+  /** The node hit; null for a latency spike (every node). */
+  node: string | null;
+  intensity: number;
+}
+
+export type FeedKind =
+  | "incident_start"
+  | "incident_end"
+  | "saturated"
+  | "recovered"
+  | "retries"
+  | "failures";
+
+/** `feed`: one line of the event feed. `text` is the engine's, printed as is. */
+export interface FeedLine {
+  t: number;
+  kind: FeedKind;
+  severity: FindingSeverity;
+  node: string | null;
+  text: string;
+}
+
+/** `seed`: one seed of a multi-seed run has been measured. */
+export interface SeedProgress {
+  seed: number;
+  index: number;
+  of: number;
+  resilience_score: number;
+}
+
+/** `measured`: the summary before the Fix-it plan is verified. */
+export interface RunMeasured {
+  summary: Summary;
+  typical_seed: number | null;
+}
+
+/** `GET /runs/{id}`. */
+export interface RunStatusResponse {
+  run_id: string;
+  status: "running" | "done" | "failed";
+  result: SimulateResponse | null;
+  error: string | null;
 }
 
 export interface SimulateResponse {
@@ -444,6 +550,8 @@ export interface ExportFormatsResponse {
 export interface MeasuredRun {
   config: SimulationConfig;
   playbook: string | null;
+  /** 3.3: the injected failures that run carried (absent = none). */
+  customChaos?: ChaosEventCfg[];
 }
 
 /** Body of `POST /export` (see `api/schemas.py::ExportRequest`). */
@@ -451,4 +559,6 @@ export interface ExportRequest {
   config: SimulationConfig;
   playbook: string | null;
   format: ExportFormatName;
+  /** 3.3: sent only when the run on screen carried injected failures. */
+  custom_chaos?: ChaosEventCfg[];
 }

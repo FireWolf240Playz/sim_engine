@@ -40,9 +40,13 @@ export interface FixPanelInput {
   hasOutcome: boolean;
   /** A re-run (or any run) is in flight right now. */
   isPending: boolean;
+  /** 3.1c: the run is measured and its Fix-it plan is still being verified. */
+  planPending?: boolean;
+  /** 3.1c: the run is measured but its plan could not be verified. */
+  planFailed?: boolean;
 }
 
-export type FixPanelNote = "rerunning" | "applied" | "nothing" | null;
+export type FixPanelNote = "rerunning" | "applied" | "nothing" | "verifying" | "unverified" | null;
 
 export interface FixPanelView {
   /** Show the before → after diff table. */
@@ -61,9 +65,15 @@ export interface FixPanelView {
  *   ("applied");
  * - the run proposed nothing → the outcome alone (capacity cannot fix it),
  *   or "nothing to change".
+ *
+ * 3.1c: the verdict arrives before the plan. While the plan is verified the
+ * run on screen carries no suggestions yet, which must not read as "nothing
+ * to change": the panel says it is verifying, or that it could not.
  */
 export function fixPanelView(input: FixPanelInput): FixPanelView {
   const { pending, suggestions, hasOutcome, isPending } = input;
+  if (input.planPending) return { diff: false, outcome: false, note: "verifying" };
+  if (input.planFailed) return { diff: false, outcome: false, note: "unverified" };
   if (pending > 0) return { diff: true, outcome: hasOutcome, note: null };
   if (suggestions > 0) {
     return { diff: false, outcome: false, note: isPending ? "rerunning" : "applied" };

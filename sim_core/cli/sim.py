@@ -31,6 +31,7 @@ from sim_core import (
 )
 from sim_core.exports import EXPORT_FORMATS, render_export
 from sim_core.playbooks import get_playbook, list_playbooks
+from sim_core.presets import TRAFFIC_PRESETS, traffic_preset
 from sim_core.viz import render_comparison
 
 DEFAULT_REPORT = "eleven_report.png"
@@ -632,6 +633,36 @@ def _add_export_arguments(parser: argparse.ArgumentParser, *, multi_seed: bool) 
     )
 
 
+def _add_traffic_argument(parser: argparse.ArgumentParser) -> None:
+    """``--traffic NAME`` (roadmap 3.5): run the config on a named day."""
+    parser.add_argument(
+        "--traffic",
+        choices=sorted(TRAFFIC_PRESETS),
+        default=None,
+        metavar="NAME",
+        help=(
+            "Run the architecture on a named day instead of its configured "
+            f"traffic shape ({', '.join(sorted(TRAFFIC_PRESETS))}), at the "
+            "config's own base rate and traffic window."
+        ),
+    )
+
+
+def apply_traffic(config: SimulationConfig, name: str) -> SimulationConfig:
+    """``config`` with its traffic replaced by the named day.
+
+    The day keeps the config's own quiet rate and window (``base_rps``,
+    ``duration``, ``start_time``); any spike or growth is replaced. The whole
+    config is validated again, so a day too large for one run is refused with
+    the run-size limit's own sentence (:class:`ValueError`).
+    """
+    traffic = config.traffic
+    day = traffic_preset(name, traffic.base_rps, traffic.duration, traffic.start_time)
+    return SimulationConfig.model_validate(
+        {**config.model_dump(), "traffic": day.model_dump()}
+    )
+
+
 def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
     """Add the ``run`` / ``demo`` / ``playbooks`` / ``compare`` subcommands.
 
@@ -678,6 +709,7 @@ def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
             "profile instead of one run (default: 1)."
         ),
     )
+    _add_traffic_argument(run_p)
     _add_export_arguments(run_p, multi_seed=True)
 
     demo_p = subparsers.add_parser(
@@ -693,6 +725,7 @@ def register_sim_commands(subparsers: argparse._SubParsersAction) -> None:
             "(see `eleven playbooks list`), e.g. db_failover."
         ),
     )
+    _add_traffic_argument(demo_p)
     _add_export_arguments(demo_p, multi_seed=False)
 
     playbooks_p = subparsers.add_parser(

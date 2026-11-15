@@ -73,6 +73,7 @@ from sim_core.config import (
 )
 from sim_core.engine import CloudSimulator, ComponentTimeoutError
 from sim_core.exports import EXPORT_FORMATS, render_export, to_csv, to_json, to_xlsx
+from sim_core.feed import Narrator, narrate
 from sim_core.findings import Finding, build_findings, verdict_headline
 from sim_core.findings import Severity as FindingSeverity
 from sim_core.metrics import MetricsCollector, RequestRecord, UtilizationSample
@@ -143,6 +144,8 @@ __all__ = [
     "Suggestion",
     "build_suggestions",
     # Export center: per-request CSV, replayable JSON, Excel (roadmap 2.1)
+    "Narrator",
+    "narrate",
     "EXPORT_FORMATS",
     "render_export",
     "to_csv",

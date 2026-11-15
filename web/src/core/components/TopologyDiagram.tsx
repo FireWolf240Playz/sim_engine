@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ComponentRole } from "../types";
 import {
@@ -22,6 +22,7 @@ import {
   layout,
   layoutKey,
 } from "../lib/graphLayout";
+import { pulseLevel, withLive } from "../lib/liveView";
 import {
   nodeViews,
   type NodeViewModel,
@@ -127,6 +128,12 @@ function tooltipFor(view: NodeViewModel): string {
     );
   }
   if (view.isTarget) parts.push("incident target");
+  if (view.liveUtil !== undefined) {
+    parts.push(
+      `now ${fmtPct(view.liveUtil, 0)} busy, ${view.liveCapacity}/${view.liveConfigured} slots, queue ${view.liveQueue ?? 0}`,
+    );
+    if (view.liveStruck) parts.push("incident in progress");
+  }
   return parts.join(" · ");
 }
 
@@ -213,7 +220,26 @@ function NodeShell({
 /** The drawable half of the card: halos, ring, card, chip, glyph, texts, bar. */
 export const NodeBody = memo(function NodeBody({ x, y, ...view }: NodeBodyProps) {
   const severity = view.status ? sizingSeverity(view.status) : null;
-  const util = view.meanUtil ?? 0;
+  // 3.2 — while the run plays, the bar and the number are this moment's
+  // load, coloured by it; the card's tint and word stay the run's verdict.
+  const live = view.liveUtil !== undefined;
+  const util = live ? (view.liveUtil ?? 0) : (view.meanUtil ?? 0);
+  const barTone = live ? (view.liveTone ?? "ok") : severity;
+  const lostSlots =
+    live && view.liveCapacity !== undefined && view.liveConfigured !== undefined
+      ? view.liveCapacity < view.liveConfigured
+      : false;
+  const queue = live ? (view.liveQueue ?? 0) : 0;
+  // The name row shares its width with "q10 0/12": the name gets what that
+  // label leaves (mono: ~7.3px a character at 12px, ~6.1px at 10px; the
+  // row runs from x+46 to x+151).
+  const rowLabel = [
+    queue > 0 ? `q${Math.round(queue)}` : "",
+    lostSlots ? `${view.liveCapacity}/${view.liveConfigured}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const nameMax = rowLabel ? Math.max(4, Math.floor((105 - rowLabel.length * 6.1 - 6) / 7.3)) : 13;
   const trackW = NODE_W - 18;
   // 1.3g — this node's size moved since the numbers were measured. The
   // old size's tint, word and bar must not pass as current: neutral card,
@@ -247,6 +273,12 @@ export const NodeBody = memo(function NodeBody({ x, y, ...view }: NodeBodyProps)
       ) : view.inPath ? (
         // blast radius, not the victim: halo only, no ring
         <rect {...halo} className={SURFACE.accentStroke} strokeOpacity={0.1} strokeWidth={3} />
+      ) : null}
+
+      {view.liveStruck ? (
+        // 3.2 — the incident is on this node now: a steady critical ring,
+        // which flashes once as it appears (not under reduced motion).
+        <rect {...halo} className={`${SEVERITY_STROKE.crit} eleven-strike`} strokeWidth={2.2} />
       ) : null}
 
       <rect
@@ -287,8 +319,28 @@ export const NodeBody = memo(function NodeBody({ x, y, ...view }: NodeBodyProps)
         fontWeight={600}
         letterSpacing="0.01em"
       >
-        {truncate(view.name, 13)}
+        {truncate(view.name, nameMax)}
       </text>
+      {lostSlots || queue > 0 ? (
+        // 3.2 — the queue waiting, and the slots left of the configured
+        // size (the outage, in numbers).
+        <text
+          x={x + NODE_W - 9}
+          y={y + 22}
+          textAnchor="end"
+          fontSize={10}
+          fontFamily={MONO}
+        >
+          {queue > 0 ? (
+            <tspan className={SURFACE.dim}>{`q${Math.round(queue)}`}</tspan>
+          ) : null}
+          {lostSlots ? (
+            <tspan className={SEVERITY_FILL.crit} fontWeight={600} dx={queue > 0 ? 5 : 0}>
+              {`${view.liveCapacity}/${view.liveConfigured}`}
+            </tspan>
+          ) : null}
+        </text>
+      ) : null}
 
       {remeasuring ? (
         // no size to speak of yet: track stays, the fill does not
@@ -341,11 +393,11 @@ export const NodeBody = memo(function NodeBody({ x, y, ...view }: NodeBodyProps)
             x={x + NODE_W - 9}
             y={y + 37}
             textAnchor="end"
-            className={SURFACE.dim}
+            className={live && barTone !== "ok" && barTone ? SEVERITY_FILL[barTone] : SURFACE.dim}
             fontSize={10}
             fontFamily={MONO}
           >
-            {fmtPct(view.meanUtil ?? 0, 0)}
+            {fmtPct(util, 0)}
           </text>
           <rect
             x={x + 9}
@@ -356,14 +408,14 @@ export const NodeBody = memo(function NodeBody({ x, y, ...view }: NodeBodyProps)
             className={SURFACE.track}
             fillOpacity={0.7}
           />
-          {util > 0 ? (
+          {util > 0 && barTone ? (
             <rect
               x={x + 9}
               y={y + 45}
               width={Math.max(4, trackW * Math.min(1, util))}
               height={4}
               rx={2}
-              className={SEVERITY_FILL[severity]}
+              className={`${SEVERITY_FILL[barTone]} ${live ? "eleven-live-bar" : ""}`}
             />
           ) : null}
         </>
@@ -381,10 +433,24 @@ interface EdgeViewProps {
   lit: boolean;
   /** Part of the focused subgraph — accent, not edge grey. */
   emphasized: boolean;
+  /**
+   * 3.2 — while the run plays: 0–4 request pulses travelling the edge, in
+   * proportion to its traffic at this moment. `null` when not playing (the
+   * idle dash drifts instead).
+   */
+  pulses?: number | null;
 }
 
-/** One flow line: quiet base line + slow accent dash drifting source → target. */
-export function EdgeView({ d, title, long, lit, emphasized }: EdgeViewProps) {
+/** Seconds one pulse takes to travel an edge. */
+const PULSE_SECONDS = 1.6;
+
+/**
+ * One flow line: quiet base line + slow accent dash drifting source → target.
+ * While the run plays, the dash gives way to request pulses: dots moving
+ * along the path with SVG's own `animateMotion`, evenly staggered, so the
+ * SVG root can pause them all at once (`pauseAnimations`).
+ */
+export function EdgeView({ d, title, long, lit, emphasized, pulses = null }: EdgeViewProps) {
   return (
     <g opacity={lit ? (long ? 0.55 : 1) : 0.08} style={{ transition: "opacity 160ms ease" }}>
       <title>{title}</title>
@@ -395,15 +461,30 @@ export function EdgeView({ d, title, long, lit, emphasized }: EdgeViewProps) {
         strokeOpacity={emphasized ? 0.9 : 1}
         strokeWidth={emphasized ? 2 : long ? 1.1 : 1.5}
       />
-      <path
-        d={d}
-        fill="none"
-        className={`${SURFACE.accentStroke} eleven-edge-flow`}
-        strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeDasharray="4 10"
-      />
+      {pulses === null ? (
+        <path
+          d={d}
+          fill="none"
+          className={`${SURFACE.accentStroke} eleven-edge-flow`}
+          strokeOpacity={emphasized ? 0.8 : long ? 0.25 : 0.45}
+          strokeWidth={1.5}
+          strokeLinecap="round"
+          strokeDasharray="4 10"
+        />
+      ) : (
+        Array.from({ length: pulses }, (_, i) => (
+          <circle key={i} r={2.6} className="fill-accent" fillOpacity={0.85}>
+            <animateMotion
+              path={d}
+              dur={`${PULSE_SECONDS}s`}
+              // Negative begin: each dot is already part-way along, at an
+              // even spacing, from the moment it is drawn.
+              begin={`${(-PULSE_SECONDS * i) / pulses}s`}
+              repeatCount="indefinite"
+            />
+          </circle>
+        ))
+      )}
     </g>
   );
 }
@@ -435,8 +516,21 @@ export const TopologyDiagram = memo(function TopologyDiagram({
   wholePath,
   stale,
   onOpen,
+  live = null,
+  maxEdgeRate = 0,
+  paused = false,
+  reducedMotion = false,
 }: TopologyDiagramProps) {
   const [active, setActive] = useState<string | null>(null);
+  // 3.2 — pausing playback holds the pulses (SVG animations) where they are.
+  const svgRef = useRef<SVGSVGElement>(null);
+  const showingLive = live !== null;
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg || !showingLive) return;
+    if (paused) svg.pauseAnimations();
+    else svg.unpauseAnimations();
+  }, [paused, showingLive]);
 
   const key = layoutKey(nodes, edges);
   const geometry = useMemo(
@@ -456,9 +550,18 @@ export const TopologyDiagram = memo(function TopologyDiagram({
   if (geometry === null) return null;
   const { width, height, positions, edgeGeoms } = geometry;
 
-  const views = nodeViews(nodes, sizing, targetNames, wholePath, stale);
+  const views = withLive(nodeViews(nodes, sizing, targetNames, wholePath, stale), live);
   const viewOf = new Map(views.map((v) => [v.name, v] as const));
   const metaOf = new Map(edges.map((e) => [edgeKey(e), e] as const));
+  // 3.2 — requests per second on each drawn edge at this moment (edges
+  // joining the same pair are drawn once, so their traffic adds up).
+  const rateOf = new Map<string, number>();
+  if (live) {
+    edges.forEach((edge, index) => {
+      const k = edgeKey(edge);
+      rateOf.set(k, (rateOf.get(k) ?? 0) + (live.edgeRates[index] ?? 0));
+    });
+  }
 
   // Focus tracing: pointing at (or tabbing to) a node keeps it, its direct
   // neighbors, and the edges between them at full strength and fades
@@ -481,6 +584,7 @@ export const TopologyDiagram = memo(function TopologyDiagram({
     <div>
       <div className="-mx-1 overflow-x-auto px-1 pb-1">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${width} ${height}`}
           width={width}
           height={height}
@@ -509,6 +613,9 @@ export const TopologyDiagram = memo(function TopologyDiagram({
                 long={long}
                 lit={lit}
                 emphasized={emphasized}
+                pulses={
+                  live && !reducedMotion ? pulseLevel(rateOf.get(g.key) ?? 0, maxEdgeRate) : null
+                }
               />
             );
           })}
@@ -550,8 +657,16 @@ export const TopologyDiagram = memo(function TopologyDiagram({
           <span className="inline-block h-2.5 w-4 rounded-[4px] border border-dashed border-accent" />
           incident target
         </span>
+        {live ? (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2.5 w-4 rounded-[4px] border-2 border-sev-crit" />
+            incident in progress
+          </span>
+        ) : null}
         <span className="ml-auto hidden font-mono text-[10px] sm:inline">
-          bar = mean utilization · hover or tab to a node to trace its connections
+          {live
+            ? `bar = load at t=${live.time}s, dots = requests moving`
+            : "bar = mean utilization · hover or tab to a node to trace its connections"}
         </span>
       </div>
     </div>

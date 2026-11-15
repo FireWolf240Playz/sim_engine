@@ -181,10 +181,40 @@ body {
   opacity: 0.55;
 }
 
+/*
+  3.2 live view — the incident striking a node: its critical ring flashes
+  once as it appears, then stays steady while the incident lasts. The live
+  load bar glides between ticks. Both are still under reduced motion (the
+  request pulses are not drawn at all there).
+*/
+@keyframes eleven-strike {
+  0% {
+    stroke-opacity: 1;
+    stroke-width: 7;
+  }
+  100% {
+    stroke-opacity: 0.85;
+    stroke-width: 2.2;
+  }
+}
+
+.eleven-strike {
+  stroke-opacity: 0.85;
+  animation: eleven-strike 650ms ease-out 2;
+}
+
+.eleven-live-bar {
+  transition: width 260ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .eleven-edge-flow,
-  .eleven-target-ring {
+  .eleven-target-ring,
+  .eleven-strike {
     animation: none;
+  }
+  .eleven-live-bar {
+    transition: none;
   }
   .eleven-modal-backdrop,
   .eleven-modal-panel {

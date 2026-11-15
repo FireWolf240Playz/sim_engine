@@ -13,11 +13,18 @@ interface Props {
   sizing: Record<string, ComponentSizing>;
   /** 1.3g: nodes whose size moved since the last measured run. */
   stale?: { names: readonly string[]; running: boolean };
+  /**
+   * 3.1c: the Fix-it plan is still being verified, so the labels and the
+   * recommended sizes are the unverified ones and will move.
+   */
+  provisional?: boolean;
 }
 
 /** Per-node right-sizing readout: the verified label, utilization as evidence. */
-export function SizingTable({ nodes, sizing, stale }: Props) {
+export function SizingTable({ nodes, sizing, stale, provisional = false }: Props) {
   const staleNames = new Set(stale?.names ?? []);
+  const verifying = provisional ? "opacity-50 transition-opacity" : "transition-opacity";
+  const verifyingTitle = provisional ? "verifying…" : undefined;
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-left">
@@ -54,10 +61,10 @@ export function SizingTable({ nodes, sizing, stale }: Props) {
                 <td className="py-2.5 pr-4 font-mono text-sm text-ink">
                   {info ? info.p95_queue.toFixed(1) : empty}
                 </td>
-                <td className="py-2.5 pr-4 font-mono text-sm text-ink">
+                <td className={`py-2.5 pr-4 font-mono text-sm text-ink ${verifying}`} title={verifyingTitle}>
                   {info && label ? `×${label.capacity}` : empty}
                 </td>
-                <td className="py-2.5">
+                <td className={`py-2.5 ${verifying}`} title={verifyingTitle}>
                   {label && sev ? (
                     <span className={`inline-flex items-center gap-1.5 text-sm ${SEVERITY_TEXT[sev]}`}>
                       <SeverityIcon severity={sev} className="h-3 w-3" />

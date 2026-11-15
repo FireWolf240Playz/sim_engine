@@ -16,14 +16,20 @@ Run from the repo root::
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 import sim_core
-from api.routes import compare, export, imports_api, playbooks, presets, simulate
+from api.routes import compare, export, imports_api, playbooks, presets, runs, simulate
+from api.runs import RunStore
 from api.schemas import HealthResponse
+
+#: Runs started with ``POST /runs`` that simulate at the same time; the rest
+#: wait their turn (they are already listed, as running).
+RUN_WORKERS: int = 2
 
 #: Environment variable naming the browser origins allowed to call the API,
 #: comma-separated (``https://eleven.example.com,https://staging.example.com``).
@@ -68,7 +74,15 @@ def create_app() -> FastAPI:
         **_cors_origins(),
     )
 
+    # Runs started with POST /runs: kept in memory, simulated on worker
+    # threads so the request that starts one answers at once.
+    app.state.runs = RunStore()
+    app.state.run_pool = ThreadPoolExecutor(
+        max_workers=RUN_WORKERS, thread_name_prefix="eleven-run"
+    )
+
     app.include_router(simulate.router)
+    app.include_router(runs.router)
     app.include_router(export.router)
     app.include_router(compare.router)
     app.include_router(imports_api.router)

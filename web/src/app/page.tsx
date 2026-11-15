@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel } from "@/components/Panel";
 import { IncidentPicker } from "@/components/IncidentPicker";
@@ -12,12 +12,14 @@ import { SizingTable } from "@/core/components/SizingTable";
 import { StatCards } from "@/core/components/StatCards";
 import { VerdictPanel } from "@/core/components/VerdictPanel";
 import { TimelineChart } from "@/core/components/TimelineChart";
-import { TopologyDiagram } from "@/core/components/TopologyDiagram";
+import { LiveStage, type SeekRequest } from "@/core/components/LiveStage";
+import { TrafficShapePicker } from "@/core/components/TrafficShapePicker";
 import { NodeInspector } from "@/core/components/NodeInspector";
 import { api } from "@/core/api/client";
 import { DEMO_META, playbookTargets } from "@/core/lib/demo";
 import { chaosWindows } from "@/core/lib/chaos";
 import { pendingSuggestions } from "@/core/lib/suggestions";
+import { failedNodes, failureEvent, failureLabel } from "@/core/lib/clickToFail";
 import { fixPanelView, staleNodes, type FixPanelNote } from "@/core/lib/rerun";
 import { inspectNode } from "@/core/lib/nodeInspector";
 import { CONFIDENCE_SEEDS, useRunState, type RunMode } from "@/core/state/RunStateContext";
@@ -47,7 +49,14 @@ const FIX_NOTES: Record<Exclude<FixPanelNote, null>, string> = {
   rerunning: "Re-running with your change…",
   applied: "Applied, not yet measured: run again to see the result.",
   nothing: "Nothing to change: every node is the right size for this load.",
+  // 3.1c: the verdict is in, the plan is still being proven.
+  verifying: "Verifying the fix by simulation…",
+  unverified: "The fix could not be verified.",
 };
+
+function sentenceCase(text: string): string {
+  return text ? text[0].toUpperCase() + text.slice(1) : text;
+}
 
 function EmptyState() {
   return (
@@ -107,16 +116,31 @@ export default function HomePage() {
     measuredRun,
     error,
     isPending,
+    planPending,
+    planError,
+    feed,
+    customChaos,
+    injectFailure,
+    clearFailure,
+    setTrafficShape,
   } = useRunState();
   const { data: playbooks } = useQuery({ queryKey: ["playbooks"], queryFn: api.playbooks });
 
   const sizing = result?.summary.component_sizing;
-  const targets = useMemo(
-    () => playbookTargets(playbook, config.topology.nodes),
-    [playbook, config.topology.nodes],
-  );
+  // The incident's targets, plus every node with an injected failure (3.3).
+  const targets = useMemo(() => {
+    const fromPlaybook = playbookTargets(playbook, config.topology.nodes);
+    const failed = failedNodes(customChaos).filter((n) => !fromPlaybook.names.includes(n));
+    return { ...fromPlaybook, names: [...fromPlaybook.names, ...failed] };
+  }, [playbook, config.topology.nodes, customChaos]);
   const { names: targetNames, wholePath } = targets;
-  const context = playbook ? `under ${playbook.replace(/_/g, " ")}` : "on the clean run";
+  const injectedCount = customChaos.length;
+  const injectedWords = `${injectedCount} injected failure${injectedCount > 1 ? "s" : ""}`;
+  const context = playbook
+    ? `under ${playbook.replace(/_/g, " ")}${injectedCount ? ` + ${injectedWords}` : ""}`
+    : injectedCount
+      ? `with ${injectedWords}`
+      : "on the clean run";
   // Suggestions not yet applied to the active config. The verified outcome
   // describes the whole set, so it shows only while that set is still
   // pending, or when there is nothing to apply but findings capacity can't fix.
@@ -138,11 +162,43 @@ export default function HomePage() {
     suggestions: suggestions.length,
     hasOutcome: Boolean(result?.summary.fix_outcome),
     isPending,
+    planPending,
+    planFailed: planError !== null,
   });
+  // 5-seed mode: how far the seeds are, while they run.
+  const seedCount = feed.started?.seeds?.length ?? 0;
+  const runLabel = !isPending
+    ? "Run"
+    : seedCount > 1 && feed.phase === "running"
+      ? `Running… ${feed.seedsDone}/${seedCount}`
+      : "Running…";
+
+  // The pickers only choose what the NEXT run does. When they no longer
+  // match the run on screen, say so: otherwise a click looks like it did
+  // nothing.
+  const changed: string[] = [];
+  if (measuredRun && !isPending) {
+    if (measuredRun.playbook !== playbook) changed.push("incident");
+    if ((measuredRun.config.traffic.shape ?? "flat") !== (config.traffic.shape ?? "flat")) {
+      changed.push("traffic");
+    }
+    const ran = failedNodes(measuredRun.customChaos ?? []).join(",");
+    if (ran !== failedNodes(customChaos).join(",")) changed.push("injected failures");
+  }
+  const settingsChanged = changed.length > 0;
 
   // 1.4 — which node the inspector has open. `setInspected` is stable, so
   // passing it to the memo'd diagram never churns its props.
   const [inspected, setInspected] = useState<string | null>(null);
+
+  // 3.4 — the timeline and the live view point at the same moment: the
+  // chart shows the live view's tick, and a click on the chart moves it.
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
+  const onChartSeek = useCallback(
+    (t: number) => setSeekRequest((prev) => ({ t, n: (prev?.n ?? 0) + 1 })),
+    [],
+  );
   const inspection = inspected && result ? inspectNode(inspected, config, result, stale) : null;
 
   return (
@@ -197,28 +253,82 @@ export default function HomePage() {
             type="button"
             onClick={() => requestRun()}
             disabled={isPending}
-            className="h-8 rounded-lg bg-accent px-6 text-sm font-semibold text-white shadow-card transition-colors outline-none hover:bg-accent-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 disabled:cursor-not-allowed disabled:opacity-60"
+            className={`h-8 rounded-lg bg-accent px-6 text-sm font-semibold text-white shadow-card transition-colors outline-none hover:bg-accent-2 focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-0 disabled:cursor-not-allowed disabled:opacity-60 ${
+              settingsChanged ? "ring-4 ring-accent/30" : ""
+            }`}
           >
-            {isPending ? "Running…" : "Run"}
+            {runLabel}
           </button>
         </div>
       </div>
 
       <section
-        aria-label="Incident"
-        className="flex flex-wrap items-start gap-x-4 gap-y-2 rounded-xl border border-line bg-surface-1 px-4 py-2.5 shadow-card"
+        aria-label="Incident and traffic"
+        className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-4 gap-y-2 rounded-xl border border-line bg-surface-1 px-4 py-2.5 shadow-card"
       >
         {/* Lined up with the segmented control's row, whether the
             description sits beside the control or wraps under it. */}
         <h2 className="mt-2.5 text-[13px] font-semibold leading-5 text-ink">Incident</h2>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0">
           <IncidentPicker
             value={playbook}
             onChange={setPlaybook}
             options={playbooks?.playbooks ?? []}
             disabled={isPending}
           />
+          {/* 3.3 — failures injected from the node inspector, on top of the incident. */}
+          {customChaos.length ? (
+            <ul className="mt-2 flex flex-wrap gap-2" aria-label="Injected failures">
+              {customChaos.map((event) => (
+                <li
+                  key={event.target ?? ""}
+                  className="flex items-center gap-1.5 rounded-md border border-sev-crit/40 bg-sev-crit-soft py-0.5 pl-2.5 pr-1 font-mono text-[12px] text-sev-crit"
+                >
+                  {failureLabel(event)}
+                  <button
+                    type="button"
+                    onClick={() => event.target && clearFailure(event.target)}
+                    aria-label={`Remove the failure on ${event.target}`}
+                    className="flex h-5 w-5 items-center justify-center rounded text-sev-crit outline-none transition-colors hover:bg-sev-crit/15 focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" aria-hidden="true" focusable="false">
+                      <path d="m3 3 6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                    </svg>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
+
+        {/* 3.5b — the shape of the day the next run plays. */}
+        <h2 className="mt-2.5 text-[13px] font-semibold leading-5 text-ink">Traffic</h2>
+        <div className="min-w-0">
+          <TrafficShapePicker
+            traffic={config.traffic}
+            onChange={setTrafficShape}
+            disabled={isPending}
+          />
+        </div>
+
+        {settingsChanged ? (
+          <p
+            role="status"
+            className="col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-2 text-[13px] leading-5 text-ink-dim"
+          >
+            <span>
+              You changed the {changed.join(" and ")}. The results below are still the
+              previous run&apos;s.
+            </span>
+            <button
+              type="button"
+              onClick={() => requestRun()}
+              className="rounded-md px-2 py-0.5 font-semibold text-accent outline-none transition-colors hover:bg-accent-soft focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Run with these settings
+            </button>
+          </p>
+        ) : null}
       </section>
 
       {error ? <ErrorState message={error} /> : null}
@@ -227,7 +337,7 @@ export default function HomePage() {
           and a run in flight dims them instead of blanking the page. The
           dimming applies to this element's direct children. */}
       <div className="eleven-results flex flex-col gap-4" aria-busy={isPending}>
-        <StatCards summary={result?.summary ?? null} context={context} />
+        <StatCards summary={result?.summary ?? null} context={context} provisional={planPending} />
 
         {result && sizing ? (
           // eleven-live: stays at full strength while a re-run runs — only
@@ -237,7 +347,11 @@ export default function HomePage() {
               title="Topology"
               aside={playbook ? `incident targets: ${wholePath ? "whole path" : targetNames.join(", ")}` : "clean run"}
             >
-              <TopologyDiagram
+              {/* 3.2: the diagram plays the run, beside its event feed. */}
+              <LiveStage
+                feed={feed}
+                onCursor={setCursor}
+                seekRequest={seekRequest}
                 nodes={config.topology.nodes}
                 edges={config.topology.edges ?? NO_EDGES}
                 sizing={sizing}
@@ -252,6 +366,15 @@ export default function HomePage() {
                   onClose={() => setInspected(null)}
                   onApply={applyAndRerun}
                   isPending={isPending}
+                  failure={{
+                    label: (() => {
+                      const event = customChaos.find((e) => e.target === inspection.name);
+                      return event ? failureLabel(event) : null;
+                    })(),
+                    preview: failureLabel(failureEvent(inspection.name, config)),
+                    onInject: () => injectFailure(inspection.name),
+                    onRemove: () => clearFailure(inspection.name),
+                  }}
                 />
               ) : null}
             </Panel>
@@ -295,7 +418,10 @@ export default function HomePage() {
                 ) : fixView.note !== null ? (
                   // Kept mounted when empty, so applying a fix never makes the
                   // panels below jump up the page.
-                  <p className="text-[13px] text-ink-dim">{FIX_NOTES[fixView.note]}</p>
+                  <p className="text-[13px] text-ink-dim" aria-live="polite">
+                    {FIX_NOTES[fixView.note]}
+                    {fixView.note === "unverified" && planError ? ` ${sentenceCase(planError)}.` : null}
+                  </p>
                 ) : null}
               </Panel>
 
@@ -328,6 +454,8 @@ export default function HomePage() {
                 horizon={config.traffic.duration}
                 band={result.timeseries_band}
                 seedCount={result.seeds?.length}
+                cursor={cursor}
+                onSeek={onChartSeek}
               />
             </Panel>
 
@@ -349,7 +477,12 @@ export default function HomePage() {
 
         {result && sizing ? (
           <Panel title="Sizing" aside="where the money sits">
-            <SizingTable nodes={config.topology.nodes} sizing={sizing} stale={stale} />
+            <SizingTable
+              nodes={config.topology.nodes}
+              sizing={sizing}
+              stale={stale}
+              provisional={planPending}
+            />
           </Panel>
         ) : null}
       </div>

@@ -32,6 +32,8 @@ export function exportRequest(
     config: { ...run.config, seed: result.typical_seed ?? run.config.seed },
     playbook: run.playbook,
     format,
+    // 3.3: the failures the run on screen carried; omitted when there were none.
+    ...(run.customChaos?.length ? { custom_chaos: run.customChaos } : {}),
   };
 }
 

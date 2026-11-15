@@ -116,6 +116,7 @@ function StatCard({
   word,
   wordClass,
   caption,
+  provisional = false,
 }: {
   label: string;
   chip: ReactNode;
@@ -123,9 +124,17 @@ function StatCard({
   word?: string;
   wordClass?: string;
   caption: string;
+  /** 3.1c: the number will move once the Fix-it plan is verified. */
+  provisional?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-line bg-surface-1 px-4 py-3.5 shadow-card">
+    <div
+      className={`rounded-xl border border-line bg-surface-1 px-4 py-3.5 shadow-card transition-opacity ${
+        provisional ? "opacity-50" : ""
+      }`}
+      title={provisional ? "verifying…" : undefined}
+      aria-busy={provisional || undefined}
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="text-[12.5px] font-medium text-ink-dim">{label}</span>
         {chip}
@@ -164,14 +173,21 @@ const GRID = "grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6";
  * of the engine's own `sla_breach` / `p95_headroom` findings, so a tile can
  * never disagree with the verdict under it. Failed requests carry no tone.
  * Renders meaningful pre-run placeholders instead of hiding.
+ *
+ * 3.1c: while the Fix-it plan is verified (`provisional`) the cost grade is
+ * graded on unverified sizing labels and will be taken again, so its tile is
+ * dimmed. The other five are final the moment the run is measured.
  */
 export function StatCards({
   summary,
   context,
+  provisional = false,
 }: {
   summary: Summary | null;
   /** e.g. "under db failover" or "on the clean run" — the incident in context. */
   context?: string;
+  /** 3.1c: the run is measured and its Fix-it plan is still being verified. */
+  provisional?: boolean;
 }) {
   if (!summary) {
     const blank: Array<{ label: string; icon: ReactNode; caption: string }> = [
@@ -274,7 +290,14 @@ export function StatCards({
           </IconChip>
         }
         value={grade ?? "–"}
-        caption={nodes > 0 ? `Right-sizing across ${nodes} nodes` : "Right-sizing of the nodes"}
+        caption={
+          provisional
+            ? "Verifying the right-sizing…"
+            : nodes > 0
+              ? `Right-sizing across ${nodes} nodes`
+              : "Right-sizing of the nodes"
+        }
+        provisional={provisional}
       />
       <StatCard
         label="Projected bill"

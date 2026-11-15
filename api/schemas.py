@@ -14,20 +14,21 @@ from pydantic import BaseModel, Field
 
 from api.limits import MAX_SWEEP_VALUES, MAX_WHAT_IF_VARIANTS
 from sim_core import SimulationConfig
+from sim_core.config import ChaosEvent
 from sim_core.exports import EXPORT_FORMATS
 
+#: Failures one request may inject on top of its config and playbook (3.3).
+MAX_CUSTOM_CHAOS: int = 8
 
-class SimulateRequest(BaseModel):
-    """One simulation run.
+
+class RunSpec(BaseModel):
+    """What names a run: the architecture, the incident, and the seeds.
+
+    Shared by ``POST /simulate`` and ``POST /runs`` so the two accept the
+    same fields with the same limits.
 
     ``playbook`` (optional) appends a named incident's chaos events to
-    ``config.chaos`` (see :mod:`sim_core.playbooks`); an
-    unknown name is a 404. ``include_report_png`` returns the rendered
-    report as base64 so the frontend can display it without extra calls.
-
-    ``include_timeseries`` returns the per-tick timeline (p50/p95 latency
-    windows + per-component utilisation) so the frontend can draw the
-    latency-vs-chaos timeline from one response.
+    ``config.chaos`` (see :mod:`sim_core.playbooks`); an unknown name is a 404.
 
     Multi-seed confidence (roadmap 1.1): ``n_seeds > 1`` runs the engine
     once per seed (seed = ``config.seed`` + i, or 42 + i when the config
@@ -35,12 +36,16 @@ class SimulateRequest(BaseModel):
     ``profile`` in addition to ``summary`` (the typical run's). An
     explicit ``seeds`` list overrides ``n_seeds`` when both are given.
     ``n_seeds == 1`` (the default) leaves the response shape unchanged.
+
+    ``custom_chaos`` (roadmap 3.3) are failures the user injected by hand
+    (e.g. "fail this node"), run after the config's own events and the
+    playbook's. They ride beside ``config`` because the config is the
+    architecture and these are what is done to it.
     """
 
     config: SimulationConfig
     playbook: str | None = None
-    include_report_png: bool = False
-    include_timeseries: bool = False
+    custom_chaos: list[ChaosEvent] = Field(default_factory=list, max_length=MAX_CUSTOM_CHAOS)
     n_seeds: int = Field(
         1,
         ge=1,
@@ -56,6 +61,46 @@ class SimulateRequest(BaseModel):
         max_length=20,
         description="Explicit seed list; wins over n_seeds when both are set.",
     )
+
+
+class SimulateRequest(RunSpec):
+    """One simulation run, answered when it is complete.
+
+    ``include_report_png`` returns the rendered report as base64 so the
+    frontend can display it without extra calls. ``include_timeseries``
+    returns the per-tick timeline (latency windows, per-node utilisation,
+    live capacity, edge traffic) so the frontend can draw it from one
+    response.
+    """
+
+    include_report_png: bool = False
+    include_timeseries: bool = False
+
+
+class RunRequest(RunSpec):
+    """One run, started now and watched as it goes (roadmap 3.1).
+
+    The stream's ``result`` is exactly what ``POST /simulate`` returns for
+    the same fields with ``include_timeseries`` on.
+    """
+
+
+class RunStartedResponse(BaseModel):
+    """``POST /runs``: the run's id and where to watch it."""
+
+    run_id: str
+    events_url: str
+
+
+class RunStatusResponse(BaseModel):
+    """``GET /runs/{run_id}``: the run without a stream."""
+
+    run_id: str
+    status: Literal["running", "done", "failed"]
+    #: The ``/simulate`` body, once the run is done.
+    result: dict[str, Any] | None = None
+    #: Why the run failed, as a sentence.
+    error: str | None = None
 
 
 class SimulateResponse(BaseModel):
@@ -165,6 +210,8 @@ class ExportRequest(BaseModel):
     config: SimulationConfig
     format: ExportFormatName
     playbook: str | None = None
+    #: 3.3: the failures injected into the run on screen, so the file is that run.
+    custom_chaos: list[ChaosEvent] = Field(default_factory=list, max_length=MAX_CUSTOM_CHAOS)
 
 
 class ExportFormatInfo(BaseModel):

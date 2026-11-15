@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import math
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -486,6 +486,57 @@ class GraphTopologyConfig(BaseModel):
         )
 
 
+#: Roadmap 3.5 — how the base rate bends over the traffic window.
+TrafficShape = Literal["flat", "ramp", "diurnal", "black_friday"]
+
+#: How many times busier than ``base_rps`` each shape's peak is by default.
+DEFAULT_SHAPE_PEAK: dict[str, float] = {"ramp": 3.0, "diurnal": 3.0, "black_friday": 5.0}
+
+
+def shape_multiplier(shape: str, u: float, peak: float) -> float:
+    """The base rate's multiplier at fraction ``u`` (0-1) of the traffic window.
+
+    ``ramp`` climbs in a straight line to ``peak``; ``diurnal`` is one day,
+    quiet at both ends and ``peak`` in the middle (``sin^2``);
+    ``black_friday`` is a normal day for 40% of the window, a climb over the
+    next 10%, ``peak`` held for 30%, and a decline over the last 20%.
+    ``web/src/core/lib/trafficShape.ts`` mirrors these numbers.
+    """
+    if shape == "ramp":
+        return 1.0 + (peak - 1.0) * u
+    if shape == "diurnal":
+        return 1.0 + (peak - 1.0) * math.sin(math.pi * u) ** 2
+    if shape == "black_friday":
+        if u < 0.4:
+            return 1.0
+        if u < 0.5:
+            return 1.0 + (peak - 1.0) * (u - 0.4) / 0.1
+        if u < 0.8:
+            return peak
+        return peak - (peak - 1.0) * (u - 0.8) / 0.2
+    return 1.0
+
+
+def _shape_area(shape: str, u: float, peak: float) -> float:
+    """The integral of :func:`shape_multiplier` from 0 to ``u``, in closed form."""
+    rise = peak - 1.0
+    if shape == "ramp":
+        return u + rise * u * u / 2.0
+    if shape == "diurnal":
+        return u + rise * (u / 2.0 - math.sin(2.0 * math.pi * u) / (4.0 * math.pi))
+    if shape == "black_friday":
+        if u <= 0.4:
+            return u
+        if u <= 0.5:
+            return u + rise * (u - 0.4) ** 2 / 0.2
+        climbed = 0.5 + 0.05 * rise  # the area at u = 0.5
+        if u <= 0.8:
+            return climbed + peak * (u - 0.5)
+        held = climbed + 0.3 * peak  # the area at u = 0.8
+        return held + peak * (u - 0.8) - rise * (u - 0.8) ** 2 / 0.4
+    return u
+
+
 class TrafficPattern(BaseModel):
     """Traffic generation profile.
 
@@ -494,6 +545,14 @@ class TrafficPattern(BaseModel):
     fields define a single high-rate window layered on top of the base curve.
     Arrivals between emissions are modelled as a Poisson process (exponential
     inter-arrival times) rather than fixed spacing.
+
+    ``shape`` (roadmap 3.5) bends the base rate over the traffic window:
+    ``flat`` (the default, the rate as configured), ``ramp``, ``diurnal`` or
+    ``black_friday`` (see :func:`shape_multiplier`). ``base_rps`` is always
+    the quiet rate; ``shape_peak`` is how many times busier the peak is
+    (:data:`DEFAULT_SHAPE_PEAK` when unset). A spike still overrides the
+    curve while it lasts. A shape and exponential growth are two rate laws
+    and cannot be combined.
     """
 
     model_config = _STRICT
@@ -512,6 +571,74 @@ class TrafficPattern(BaseModel):
     spike_rps: Optional[float] = Field(None, gt=0.0, description="Arrival rate during the spike window.")
     spike_start: Optional[float] = Field(None, ge=0.0, description="When the spike window begins.")
     spike_duration: Optional[float] = Field(None, gt=0.0, description="Length of the spike window.")
+
+    shape: TrafficShape = Field(
+        "flat",
+        description=(
+            "How the base rate bends over the traffic window "
+            "(flat, ramp, diurnal, black_friday)."
+        ),
+    )
+    shape_peak: float | None = Field(
+        None,
+        gt=1.0,
+        description="How many times busier than base_rps the shape's peak is (default per shape).",
+    )
+
+    @model_validator(mode="after")
+    def _shape_is_one_rate_law(self) -> TrafficPattern:
+        """A peak needs a shape to apply to, and a shape replaces growth."""
+        if self.shape == "flat":
+            if self.shape_peak is not None:
+                raise ValueError(
+                    "shape_peak needs a shape other than flat; "
+                    "on a flat pattern it would be ignored"
+                )
+        elif self.pattern_type is PatternType.EXPONENTIAL:
+            raise ValueError(
+                f"shape {self.shape!r} and exponential growth are two rate laws; "
+                "pick one (set pattern_type to constant, or shape to flat)"
+            )
+        return self
+
+    @property
+    def peak_multiplier(self) -> float:
+        """How many times ``base_rps`` the shape peaks at (1 for flat)."""
+        if self.shape == "flat":
+            return 1.0
+        return self.shape_peak if self.shape_peak is not None else DEFAULT_SHAPE_PEAK[self.shape]
+
+    def _window_fraction(self, t: float) -> float:
+        """How far through the traffic window ``t`` is, clamped to 0-1."""
+        return min(1.0, max(0.0, (t - self.start_time) / self.duration))
+
+    def _in_spike(self, t: float) -> bool:
+        return (
+            self.spike_rps is not None
+            and self.spike_start is not None
+            and self.spike_duration is not None
+            and self.spike_start <= t < self.spike_start + self.spike_duration
+        )
+
+    def rate_at(self, t: float) -> float:
+        """The arrival rate (requests/second) at time ``t``.
+
+        Zero outside the traffic window; the spike rate while a spike is
+        active; else the exponential law, or ``base_rps`` times the shape.
+        Pure: :mod:`sim_core.traffic` samples arrivals from it.
+        """
+        if t < self.start_time or t >= self.start_time + self.duration:
+            return 0.0
+        if self._in_spike(t):
+            assert self.spike_rps is not None
+            return self.spike_rps
+        if self.pattern_type is PatternType.EXPONENTIAL:
+            return self.base_rps * float(2.0 ** ((t - self.start_time) / self.growth_period))
+        if self.shape == "flat":
+            return self.base_rps
+        return self.base_rps * shape_multiplier(
+            self.shape, self._window_fraction(t), self.peak_multiplier
+        )
 
     @model_validator(mode="after")
     def _spike_is_whole_and_inside_the_window(self) -> TrafficPattern:
@@ -549,6 +676,12 @@ class TrafficPattern(BaseModel):
             tau = self.growth_period
             growth = _pow2((b - self.start_time) / tau) - _pow2((a - self.start_time) / tau)
             return self.base_rps * tau / math.log(2.0) * growth
+        if self.shape != "flat":
+            peak = self.peak_multiplier
+            area = _shape_area(self.shape, self._window_fraction(b), peak) - _shape_area(
+                self.shape, self._window_fraction(a), peak
+            )
+            return self.base_rps * self.duration * area
         return self.base_rps * (b - a)
 
     def _spike_overlap(self, lo: float, hi: float) -> tuple[float, float]:
@@ -581,6 +714,15 @@ class TrafficPattern(BaseModel):
         peak = self.base_rps
         if self.pattern_type is PatternType.EXPONENTIAL:
             peak *= _pow2((hi - lo) / self.growth_period)
+        if self.shape != "flat":
+            # Every curve rises to its middle (black_friday holds its peak
+            # from u = 0.5): before then the highest point is where the
+            # horizon cuts it; a ramp keeps rising to its end.
+            u = self._window_fraction(hi)
+            top = self.peak_multiplier
+            if self.shape == "ramp" or u < 0.5:
+                top = shape_multiplier(self.shape, u, top)
+            peak *= top
         a, b = self._spike_overlap(lo, hi)
         if b > a and self.spike_rps is not None:
             peak = max(peak, self.spike_rps)

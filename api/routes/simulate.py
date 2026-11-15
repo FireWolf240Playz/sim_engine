@@ -17,14 +17,17 @@ from __future__ import annotations
 
 import base64
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
 from api.limits import check_budget
-from api.schemas import SimulateRequest, SimulateResponse
+from api.schemas import RunSpec, SimulateRequest, SimulateResponse
 from sim_core import CloudSimulator, SimulationConfig, resilience_profile, typical_index
+from sim_core.config import ChaosEvent
 from sim_core.playbooks import get_playbook
 from sim_core.profile import timeseries_band
 
@@ -47,29 +50,61 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
     - ``n_seeds > 1`` (or explicit ``seeds``) → one run per seed plus the
       worst/typical/best profile; ``summary`` is the typical run's.
     """
-    config = apply_playbook_or_404(payload.config, payload.playbook)
+    config = effective_config(payload.config, payload.playbook, payload.custom_chaos)
 
     seed_list = _resolve_seed_list(payload, config.seed)
     check_budget(config, runs=len(seed_list) if seed_list is not None else 1)
     if seed_list is None:
         return _single_run_response(config, payload.include_report_png, payload.include_timeseries)
 
-    runs: List[dict[str, Any]] = []
-    series: List[List[dict[str, Any]]] = []
+    summaries: list[dict[str, Any]] = []
+    series: list[list[dict[str, Any]]] = []
     for seed in seed_list:
-        # SimulationConfig is frozen → copy with the per-run seed. Deep so
-        # no nested config state is shared between runs.
-        run_config = config.model_copy(deep=True, update={"seed": seed})
-        simulator = CloudSimulator(run_config)
-        runs.append({"seed": seed, "summary": simulator.run()})
+        simulator = CloudSimulator(seed_config(config, seed))
+        summaries.append(simulator.run())
         if payload.include_timeseries:
             series.append(simulator.collector.timeseries())
+    return multi_seed_body(
+        config, seed_list, summaries, series if payload.include_timeseries else None
+    )
 
-    summaries = [run["summary"] for run in runs]
+
+def seed_config(config: SimulationConfig, seed: int) -> SimulationConfig:
+    """``config`` on ``seed``. Frozen, so a copy; deep, so no nested config
+    state is shared between the runs of one call."""
+    return config.model_copy(deep=True, update={"seed": seed})
+
+
+def single_run_body(
+    config: SimulationConfig,
+    summary: dict[str, Any],
+    *,
+    report_png_b64: str | None = None,
+    timeseries: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The single-run response: exactly the four original keys (unchanged by
+    1.1), so with ``response_model_exclude_unset`` the serialized body is
+    byte-identical to the pre-1.1 contract. Shared with ``/runs``."""
+    return {
+        "summary": summary,
+        "report_png_b64": report_png_b64,
+        "chaos": [event.model_dump(mode="json") for event in config.chaos],
+        "timeseries": timeseries,
+    }
+
+
+def multi_seed_body(
+    config: SimulationConfig,
+    seed_list: list[int],
+    summaries: list[dict[str, Any]],
+    series: list[list[dict[str, Any]]] | None,
+) -> dict[str, Any]:
+    """The multi-seed response, from one summary (and, when asked for, one
+    timeline) per seed, in seed order. Shared with ``/runs``."""
     typical = typical_index(summaries)
     response: dict[str, Any] = {
         "seeds": seed_list,
-        "runs": runs,
+        "runs": [{"seed": s, "summary": m} for s, m in zip(seed_list, summaries, strict=True)],
         "profile": resilience_profile(summaries, seeds=seed_list),
         # Shared across runs: the effective schedule (config + playbook).
         "chaos": [event.model_dump(mode="json") for event in config.chaos],
@@ -77,12 +112,39 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
         "summary": summaries[typical],
         "typical_seed": seed_list[typical],
     }
-    if payload.include_timeseries:
+    if series is not None:
         # The timeline follows the headline: the typical run's ticks, plus
         # the P95 range across every seed as a confidence band behind it.
         response["timeseries"] = series[typical]
         response["timeseries_band"] = timeseries_band(series)
     return response
+
+
+def effective_config(
+    config: SimulationConfig, playbook: str | None, custom_chaos: Sequence[ChaosEvent]
+) -> SimulationConfig:
+    """The config a run actually simulates: the architecture, then the
+    playbook's events, then the failures injected by hand (3.3), in that order.
+
+    The merged config is validated again, so an injected failure aimed at a
+    node the topology does not have is refused (422) with the validator's own
+    sentence, e.g. ``chaos event targets unknown component 'nope' (known
+    nodes: [...])``. With no injected failure it is exactly
+    :func:`apply_playbook_or_404`.
+    """
+    merged = apply_playbook_or_404(config, playbook)
+    if not custom_chaos:
+        return merged
+    try:
+        return SimulationConfig.model_validate(
+            {**merged.model_dump(), "chaos": [*merged.chaos, *custom_chaos]}
+        )
+    except ValidationError as exc:
+        # One sentence, not Pydantic's list of error objects.
+        detail = "; ".join(
+            str(error["msg"]).removeprefix("Value error, ") for error in exc.errors()
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
 
 
 def apply_playbook_or_404(config: SimulationConfig, name: Optional[str]) -> SimulationConfig:
@@ -111,9 +173,7 @@ def apply_playbook_or_404(config: SimulationConfig, name: Optional[str]) -> Simu
         ) from exc
 
 
-def _resolve_seed_list(
-    payload: SimulateRequest, config_seed: Optional[int]
-) -> Optional[List[int]]:
+def _resolve_seed_list(payload: RunSpec, config_seed: Optional[int]) -> Optional[List[int]]:
     """The explicit seed list for a multi-seed request, or ``None`` for a
     single run.
 
@@ -131,15 +191,9 @@ def _resolve_seed_list(
 
 
 def _single_run_response(
-    config: Any, include_report_png: bool, include_timeseries: bool
+    config: SimulationConfig, include_report_png: bool, include_timeseries: bool
 ) -> dict[str, Any]:
-    """One run, the original response shape (unchanged by 1.1).
-
-    Returns exactly the four original keys — ``summary``,
-    ``report_png_b64``, ``chaos``, ``timeseries`` — so with
-    ``response_model_exclude_unset`` the serialized body is byte-identical
-    to the pre-1.1 contract.
-    """
+    """One run, the original response shape (unchanged by 1.1)."""
     simulator = CloudSimulator(config)
     summary = simulator.run()
 
@@ -153,12 +207,9 @@ def _single_run_response(
     if include_timeseries:
         timeseries = simulator.collector.timeseries()
 
-    return {
-        "summary": summary,
-        "report_png_b64": report_png_b64,
-        "chaos": [event.model_dump(mode="json") for event in config.chaos],
-        "timeseries": timeseries,
-    }
+    return single_run_body(
+        config, summary, report_png_b64=report_png_b64, timeseries=timeseries
+    )
 
 
 def render_report_to_temp(collector: Any, tmp_dir: str) -> Path:
