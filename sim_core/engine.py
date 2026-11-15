@@ -25,6 +25,8 @@ from sim_core.topology import Component, Topology
 if TYPE_CHECKING:
     from simpy.resources.resource import Request
 
+    from sim_core.rightsize import FixPlan
+
 
 class ComponentTimeoutError(RuntimeError):
     """A component slot could not be acquired within the timeout budget.
@@ -368,30 +370,60 @@ class CloudSimulator:
         if not self._ran:
             raise RuntimeError("attach_fix_plan needs the run first: call run(suggest=False)")
         # local: rightsize imports this module
-        from sim_core.rightsize import plan_fix, verified_sizing
+        from sim_core.rightsize import plan_fix
 
         # On this run's own seed, so the plan's "before" is this summary.
         plan = plan_fix(self.config.model_copy(update={"seed": self.seed}), summary)
-        summary["suggestions"] = plan["suggestions"]
-        # Before → after of applying every suggestion, from the same
-        # verification runs: what "Fix it" will do, and what it can't.
-        summary["fix_outcome"] = plan["outcome"]
-        # The sizing label, per node: the verified answer, so the table,
-        # the diagram and the CLI never say something else.
-        labels = verified_sizing(self.config, plan["suggestions"])
-        sizing = summary.get("component_sizing")
-        if isinstance(sizing, dict):
-            for node, (status, capacity) in labels.items():
-                info = sizing.get(node)
-                if isinstance(info, dict):
-                    info["verified_status"] = status
-                    info["verified_capacity"] = capacity
-        # The grade reads those labels, so it is taken again now that
-        # they exist: the grade and the sizing table say the same thing.
-        summary["cost_grade"] = cost_grade(summary)
-        return summary
+        return _attach_plan(self.config, summary, plan)
 
     # -- convenience -------------------------------------------------------
     @property
     def request_ids(self) -> List[str]:
         return [r.request_id for r in self.collector.requests]
+
+
+def attach_fix_plan_seeds(
+    config: SimulationConfig, seeds: list[int], summaries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """One Fix-it plan for a multi-seed run, verified on every seed, attached
+    to every seed's summary.
+
+    ``summaries[i]`` is ``config``'s ``run(suggest=False)`` on ``seeds[i]``.
+    Each seed planning on its own, with the typical one's plan on screen, was
+    the bug :func:`sim_core.rightsize.plan_fix_seeds` fixes: after an apply
+    the typical seed moved and the prediction no longer held. Mutates and
+    returns ``summaries``.
+    """
+    from sim_core.rightsize import plan_fix_seeds  # local: rightsize imports this module
+
+    plan = plan_fix_seeds(config, seeds, summaries)
+    for summary in summaries:
+        _attach_plan(config, summary, plan)
+    return summaries
+
+
+def _attach_plan(
+    config: SimulationConfig, summary: dict[str, Any], plan: FixPlan
+) -> dict[str, Any]:
+    """Put a verified plan on ``summary``: the suggestions, their outcome,
+    each node's verified sizing label, and the cost grade taken again."""
+    from sim_core.rightsize import verified_sizing  # local: rightsize imports this module
+
+    summary["suggestions"] = plan["suggestions"]
+    # Before → after of applying every suggestion, from the same
+    # verification runs: what "Fix it" will do, and what it can't.
+    summary["fix_outcome"] = plan["outcome"]
+    # The sizing label, per node: the verified answer, so the table,
+    # the diagram and the CLI never say something else.
+    labels = verified_sizing(config, plan["suggestions"])
+    sizing = summary.get("component_sizing")
+    if isinstance(sizing, dict):
+        for node, (status, capacity) in labels.items():
+            info = sizing.get(node)
+            if isinstance(info, dict):
+                info["verified_status"] = status
+                info["verified_capacity"] = capacity
+    # The grade reads those labels, so it is taken again now that
+    # they exist: the grade and the sizing table say the same thing.
+    summary["cost_grade"] = cost_grade(summary)
+    return summary

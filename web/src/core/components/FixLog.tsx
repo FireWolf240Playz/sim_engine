@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { FindingRef, FixOutcome } from "../types";
-import { recordDelta, type FixRecord } from "../lib/fixHistory";
+import { measuredOn, recordDelta, type FixRecord } from "../lib/fixHistory";
 
 function names(refs: FindingRef[]): string {
   return refs.map((f) => (f.node ? `${f.title} (${f.node})` : f.title)).join(", ");
@@ -46,7 +46,8 @@ export function FixOutcomePreview({ outcome }: { outcome: FixOutcome }) {
         </p>
       ) : null}
       <p className="text-[11.5px] text-ink-dim">
-        Measured by simulating the fixed config on seed {outcome.seed}.
+        Measured by simulating the fixed config on {measuredOn(outcome)}
+        {(outcome.seeds?.length ?? 1) > 1 ? ", the same runs the re-run will show" : ""}.
       </p>
     </div>
   );

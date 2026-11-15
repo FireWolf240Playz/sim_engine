@@ -245,6 +245,8 @@ export interface FindingRef {
 /** Mirrors `sim_core/rightsize.py::FixOutcome`. */
 export interface FixOutcome {
   seed: number;
+  /** 1.3i: every seed the plan was verified on (one, or the multi-seed run's). */
+  seeds?: number[];
   score_before: number | null;
   score_after: number | null;
   band_before: string | null;

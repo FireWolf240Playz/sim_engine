@@ -28,6 +28,7 @@ from api.limits import check_budget
 from api.schemas import RunSpec, SimulateRequest, SimulateResponse
 from sim_core import CloudSimulator, SimulationConfig, resilience_profile, typical_index
 from sim_core.config import ChaosEvent
+from sim_core.engine import attach_fix_plan_seeds
 from sim_core.playbooks import get_playbook
 from sim_core.profile import timeseries_band
 
@@ -61,9 +62,11 @@ def simulate(payload: SimulateRequest) -> dict[str, Any]:
     series: list[list[dict[str, Any]]] = []
     for seed in seed_list:
         simulator = CloudSimulator(seed_config(config, seed))
-        summaries.append(simulator.run())
+        summaries.append(simulator.run(suggest=False))
         if payload.include_timeseries:
             series.append(simulator.collector.timeseries())
+    # One plan for the whole run, verified on every seed (1.3i).
+    attach_fix_plan_seeds(config, seed_list, summaries)
     return multi_seed_body(
         config, seed_list, summaries, series if payload.include_timeseries else None
     )

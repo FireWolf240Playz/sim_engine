@@ -232,6 +232,21 @@ def test_api_single_run_key_set_unchanged(client: TestClient) -> None:
     assert "seeds" not in payload and "runs" not in payload and "profile" not in payload
 
 
+_PLAN_KEYS = {"suggestions", "fix_outcome", "cost_grade"}
+_PLAN_SIZING_KEYS = {"verified_status", "verified_capacity"}
+
+
+def _measured(summary: dict[str, Any]) -> dict[str, Any]:
+    """The summary without what the Fix-it plan attaches (the plan, its
+    outcome, the verified sizing labels and the grade taken on them)."""
+    out = {k: v for k, v in summary.items() if k not in _PLAN_KEYS}
+    out["component_sizing"] = {
+        node: {k: v for k, v in info.items() if k not in _PLAN_SIZING_KEYS}
+        for node, info in summary["component_sizing"].items()
+    }
+    return out
+
+
 def test_api_multi_run_matches_individual_runs(client: TestClient) -> None:
     """Accept: profile values exactly match the individual run summaries."""
     multi = client.post("/simulate", json=_body(seeds=[101, 202, 303])).json()
@@ -239,11 +254,18 @@ def test_api_multi_run_matches_individual_runs(client: TestClient) -> None:
     assert [r["seed"] for r in multi["runs"]] == [101, 202, 303]
 
     # Core accept: each run == the same config simulated alone at that seed.
+    # Re-pinned by 1.3i (2026-11-15): the measurement is equal; the Fix-it
+    # plan is not, by design. A multi-seed run carries one plan verified on
+    # every seed (tests/test_fix_converges.py), where a seed alone plans on
+    # itself — planning each seed alone was the bug.
     for entry in multi["runs"]:
         solo_body = _body()
         solo_body["config"]["seed"] = entry["seed"]
         solo = client.post("/simulate", json=solo_body).json()
-        assert entry["summary"] == solo["summary"]
+        assert _measured(entry["summary"]) == _measured(solo["summary"])
+        assert entry["summary"]["fix_outcome"] is None or entry["summary"]["fix_outcome"][
+            "seeds"
+        ] == [101, 202, 303]
 
     # Profile values == min/median/max over those individual summaries.
     scores = [r["summary"]["resilience_score"] for r in multi["runs"]]

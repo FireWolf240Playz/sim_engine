@@ -29,6 +29,7 @@ from sim_core import (
     score_headline,
     typical_index,
 )
+from sim_core.engine import attach_fix_plan_seeds
 from sim_core.exports import EXPORT_FORMATS, render_export
 from sim_core.playbooks import get_playbook, list_playbooks
 from sim_core.presets import TRAFFIC_PRESETS, traffic_preset
@@ -410,10 +411,12 @@ def run_multi_seed(
         # SimulationConfig is frozen -> copy with the per-run seed.
         run_config = config.model_copy(deep=True, update={"seed": seed})
         simulator = CloudSimulator(run_config)
-        runs.append({"seed": seed, "summary": simulator.run()})
+        runs.append({"seed": seed, "summary": simulator.run(suggest=False)})
         simulators.append(simulator)
 
     summaries = [run["summary"] for run in runs]
+    # One plan for the whole run, verified on every seed (1.3i).
+    attach_fix_plan_seeds(config, seeds, summaries)
     profile = resilience_profile(summaries, seeds=seeds)
     print(_format_profile(profile))
 
@@ -424,7 +427,7 @@ def run_multi_seed(
         print("\n".join(verdict))
     fix = _format_suggestions(summaries[typical])
     if fix:
-        fix.append(f"  (typical run, seed {seeds[typical]})")
+        fix.append(f"  (one plan for all {len(seeds)} runs, verified on every seed)")
         print("\n".join(fix))
 
     png = render_report(simulators[typical].collector, output_path=report_path)

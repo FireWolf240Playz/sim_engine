@@ -39,6 +39,7 @@ from api.routes.simulate import (
 from api.runs import Run, RunStore, sse
 from api.schemas import RunRequest, RunStartedResponse, RunStatusResponse, SimulateResponse
 from sim_core import CloudSimulator, SimulationConfig, typical_index
+from sim_core.engine import attach_fix_plan_seeds
 from sim_core.feed import Narrator
 
 router = APIRouter(tags=["runs"])
@@ -117,8 +118,8 @@ def _multi_seed_run(run: Run, config: SimulationConfig, seed_list: list[int]) ->
         _publish_engine_event(run, narrator, event)
     run.publish("measured", {"summary": summaries[typical], "typical_seed": seed_list[typical]})
 
-    for simulator, summary in zip(simulators, summaries, strict=True):
-        simulator.attach_fix_plan(summary)
+    # One plan for the whole run, verified on every seed (1.3i).
+    attach_fix_plan_seeds(config, seed_list, summaries)
     series = [simulator.collector.timeseries() for simulator in simulators]
     run.finish(_response_json(multi_seed_body(config, seed_list, summaries, series)))
 

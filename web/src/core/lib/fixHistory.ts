@@ -29,6 +29,18 @@ export interface FixRecord {
   failed: boolean;
 }
 
+/**
+ * 1.3i — the seeds a plan was verified on, as the preview words them:
+ * "seed 44", "seeds 42–46", "seeds 101, 202, 303". Mirrors the engine's
+ * `rightsize.py::_seeds_label`; falls back to `seed` for an older engine.
+ */
+export function measuredOn(outcome: FixOutcome): string {
+  const seeds = outcome.seeds?.length ? outcome.seeds : [outcome.seed];
+  if (seeds.length === 1) return `seed ${seeds[0]}`;
+  const consecutive = seeds.every((s, i) => s === seeds[0] + i);
+  return consecutive ? `seeds ${seeds[0]}–${seeds[seeds.length - 1]}` : `seeds ${seeds.join(", ")}`;
+}
+
 export function snapshot(summary: Summary): RunSnapshot {
   return {
     score: summary.resilience_score,

@@ -12,25 +12,40 @@ pinned seed, in three phases on one working config:
 1. **Repair.** While the run has crit/warn findings, try doubling each
    node's capacity, keep the node whose raise helps most (fewest crit, then
    fewest warn, then highest score), trim that raise back to the smallest
-   size that helps as much, and repeat. Stops when nothing is left to fix or
-   no raise helps; what remains is reported as *not fixable by capacity*
-   (e.g. injected network latency), never papered over.
+   size that helps as much, and repeat. A raise that keeps the crit count
+   and gains :data:`MIN_REPAIR_GAIN` points helps even if it brings a
+   warning: a shared bottleneck is cleared one node at a time, and each step
+   on the way can turn "breached" into "close to breaching". Stops when
+   nothing is left to fix or no raise helps; what remains is reported as
+   *not fixable by capacity* (e.g. injected network latency), never papered
+   over.
 2. **Undersized.** Any node still flagged undersized gets the smallest
    capacity that clears the flag.
 3. **Trim.** Over-provisioned nodes are cut to the smallest size that adds
    no crit/warn finding and costs at most :data:`SCORE_TOLERANCE` points
    (anchored to the best score reached).
 
-Phases 2 and 3 repeat until a pass changes nothing, so one apply lands on the
-end state. When the passes settle below the best score reached, the anchor
-drops to the settled score and they run again: that is the measure a re-run
-of the applied config would use, so it has nothing further to offer. Each
-distinct sizing is simulated once per plan. Every size is verified
-*together*: the final config is exactly
-the last accepted run, which is also what :class:`FixOutcome` reports (score
-and findings before → after), so the UI can show what applying will do.
+Phases 2 and 3 repeat until a pass changes nothing. When the passes settle
+below the best score reached, the anchor drops to the settled score and they
+run again: that is the measure a re-run of the applied config would use, so
+it has nothing further to offer. A cut can open room for a raise that did
+not help before, so while findings remain and the passes changed something,
+repair runs again: the plan ends only where a re-plan would change nothing,
+and one apply lands on the end state. Each distinct sizing is simulated once
+per plan. Every size is verified *together*: the final config is exactly the
+last accepted run, which is also what :class:`FixOutcome` reports (score and
+findings before → after), so the UI can show what applying will do.
 
 Deterministic (pinned seed: ``config.seed``, else 42).
+
+**Several seeds** (:func:`plan_fix_seeds`, the page's 5-seed mode): one plan
+for the whole run, every candidate simulated on every seed. A finding counts
+once per seed it appears on, a node is undersized if it is on any seed, and
+the score is the typical run's (:func:`sim_core.profile.typical_index`), the
+headline the re-run will show. A cut is free only if no seed gains a finding.
+Planning each seed on its own and showing the typical one's plan was the
+bug: the typical seed moves after an apply, so no prediction held and
+successive plans undid each other.
 
 Cost, measured: the 5-node demo plans in about 0.1 s (15-33 verification
 runs, clean run and incidents); the 19-node example topologies take 12-16 s
@@ -70,6 +85,10 @@ RAISE_SEARCH_FACTOR = 16
 #: Undersized/trim passes before giving up on reaching a fixed point.
 MAX_PASSES = 8
 
+#: Passes → repair rounds after the first repair: a cut can open room for
+#: another raise. A round runs only while repair still changes something.
+MAX_ROUNDS = 4
+
 #: Seed used for verification when the config has none.
 DEFAULT_SEED = 42
 
@@ -94,9 +113,12 @@ class FixOutcome(TypedDict):
     ``before`` is the pinned-seed run of the config as given, ``after`` the
     run with every suggestion applied. ``unfixed`` lists the crit/warn
     findings no capacity change cleared: their cause is not capacity.
+    ``seeds`` are the seeds every change was verified on (one, or the
+    multi-seed run's); ``seed`` is the first of them.
     """
 
     seed: int
+    seeds: list[int]
     score_before: float | None
     score_after: float | None
     band_before: str | None
@@ -139,11 +161,17 @@ def _status(summary: Summary, node: str) -> str | None:
 
 
 def _serious_findings(summary: Summary) -> dict[str, dict[str, Any]]:
-    """crit/warn findings keyed ``id@node`` (per-node ids carry the node)."""
+    """crit/warn findings keyed ``id@node`` (per-node ids carry the node).
+
+    A merged multi-seed summary tags each finding with the run it came from
+    (``_run``), so the same finding on two seeds counts twice.
+    """
     out: dict[str, dict[str, Any]] = {}
     for f in summary.get("findings") or []:
         if isinstance(f, dict) and f.get("severity") in ("crit", "warn"):
-            out[f"{f.get('id')}@{f.get('node') or ''}"] = f
+            run = f.get("_run")
+            prefix = f"{run}:" if run is not None else ""
+            out[f"{prefix}{f.get('id')}@{f.get('node') or ''}"] = f
     return out
 
 
@@ -171,12 +199,17 @@ def _rank(summary: Summary) -> tuple[int, int, float]:
 
 
 def _helps(candidate: Summary, reference: Summary) -> bool:
-    if _counts(candidate) < _counts(reference):
+    """Fewer crit always helps, more crit never does. At the same crit count
+    fewer warn helps, and so does a real score gain even with a warning more:
+    under ramp traffic every single raise on the way to clearing a breach
+    also brought a p95 headroom warning, and refusing them left a breach that
+    capacity fixes reported as unfixable."""
+    (crit, warn), (ref_crit, ref_warn) = _counts(candidate), _counts(reference)
+    if crit != ref_crit:
+        return crit < ref_crit
+    if warn < ref_warn:
         return True
-    return (
-        _counts(candidate) == _counts(reference)
-        and _score(candidate) >= _score(reference) + MIN_REPAIR_GAIN
-    )
+    return _score(candidate) >= _score(reference) + MIN_REPAIR_GAIN
 
 
 def _as_good(candidate: Summary, target: Summary) -> bool:
@@ -231,6 +264,67 @@ class _Search:
         return self.runs[capacity]
 
 
+def _merge(summaries: list[Summary]) -> Summary:
+    """One summary standing for a multi-seed run, as the planner reads it.
+
+    The typical run's (the headline's) score, band and everything else; every
+    seed's findings, tagged with their run; per node, ``undersized`` if any
+    seed says so, the waits of every seed added up, and the highest peak and
+    mean utilisation, so a cut is shortcut only when it would replay every
+    seed.
+    """
+    from sim_core.profile import typical_index  # local: keeps imports one-way
+
+    typical = summaries[typical_index(summaries)]
+    merged = dict(typical)
+    merged["findings"] = [
+        {**f, "_run": i}
+        for i, s in enumerate(summaries)
+        for f in s.get("findings") or []
+        if isinstance(f, dict)
+    ]
+    sizing: dict[str, Any] = {}
+    for node, info in (typical.get("component_sizing") or {}).items():
+        if not isinstance(info, dict):
+            continue
+        infos = [
+            i for s in summaries
+            if isinstance(i := (s.get("component_sizing") or {}).get(node), dict)
+        ]
+        waited = [i.get("waited_requests") for i in infos]
+        peaks = [i.get("peak_in_use") for i in infos]
+        utils = [i.get("mean_utilization") for i in infos]
+        sizing[node] = {
+            **info,
+            "status": (
+                "undersized" if any(i.get("status") == "undersized" for i in infos)
+                else info.get("status")
+            ),
+            "waited_requests": (
+                sum(w for w in waited if isinstance(w, int))
+                if all(isinstance(w, int) for w in waited) else None
+            ),
+            "peak_in_use": (
+                max(p for p in peaks if isinstance(p, int))
+                if all(isinstance(p, int) for p in peaks) else None
+            ),
+            "mean_utilization": (
+                max(float(u) for u in utils if isinstance(u, (int, float)))
+                if all(isinstance(u, (int, float)) for u in utils) else None
+            ),
+        }
+    merged["component_sizing"] = sizing
+    return merged
+
+
+def _seeds_label(seeds: list[int]) -> str:
+    if len(seeds) == 1:
+        return f"seed {seeds[0]}"
+    if seeds == list(range(seeds[0], seeds[0] + len(seeds))):
+        return f"seeds {seeds[0]}–{seeds[-1]}"  # noqa: RUF001 — a range, as the page prints it
+    return "seeds " + ", ".join(str(s) for s in seeds)
+
+
 def _ref(f: dict[str, Any]) -> FindingRef:
     node = f.get("node")
     return FindingRef(
@@ -256,12 +350,58 @@ def plan_fix(
     :data:`DEFAULT_SEED` and simulates its own "before". ``simulate`` is
     injectable for tests.
     """
+    # Looked up at call time, so a test can replace the module's ``_simulate``.
+    simulate_once: Simulate = simulate or _simulate
+    seed = config.seed if config.seed is not None else DEFAULT_SEED
+    return _plan(config, summary, simulate_once, [seed], shown=config.seed is not None)
+
+
+def plan_fix_seeds(
+    config: SimulationConfig,
+    seeds: list[int],
+    summaries: list[Summary],
+    *,
+    simulate: Simulate | None = None,
+) -> FixPlan:
+    """One plan for a multi-seed run, every change verified on every seed.
+
+    ``summaries[i]`` is ``config``'s own run on ``seeds[i]``
+    (``run(suggest=False)``); together they are the plan's "before", never
+    simulated again. The outcome's scores are the typical run's, so after
+    an apply, the re-run on the same seeds shows ``score_after`` as its
+    headline. See the module docstring.
+    """
+    if not seeds or len(seeds) != len(summaries):
+        raise ValueError("plan_fix_seeds needs one summary per seed")
+    simulate_once: Simulate = simulate or _simulate
+
+    def simulate_all(candidate: SimulationConfig) -> Summary:
+        return _merge([simulate_once(candidate.model_copy(update={"seed": s})) for s in seeds])
+
+    return _plan(
+        config.model_copy(update={"seed": seeds[0]}),
+        _merge(summaries),
+        simulate_all,
+        list(seeds),
+        shown=True,
+    )
+
+
+def _plan(
+    config: SimulationConfig,
+    summary: Summary,
+    simulate_once: Simulate,
+    seeds: list[int],
+    *,
+    shown: bool,
+) -> FixPlan:
+    """The plan itself. ``summary`` is the run being explained (merged when
+    there are several seeds); ``shown`` says it is ``config``'s own run at
+    its sizes, so it is the "before" and not simulated again."""
     nodes = [n.model_dump(mode="json") for n in config.topology.nodes]
     if not build_suggestions(nodes, summary) and not _serious(summary):
         return FixPlan(suggestions=[], outcome=None)
 
-    # Looked up at call time, so a test can replace the module's ``_simulate``.
-    simulate_once: Simulate = simulate or _simulate
     seen: dict[tuple[int, ...], Summary] = {}
 
     def run(candidate: SimulationConfig) -> Summary:
@@ -271,15 +411,35 @@ def plan_fix(
             seen[key] = simulate_once(candidate)
         return seen[key]
 
-    seed = config.seed if config.seed is not None else DEFAULT_SEED
-    working = config.model_copy(update={"seed": seed})
-    if config.seed is not None:
+    working = config.model_copy(update={"seed": seeds[0]})
+    if shown:
         seen[tuple(n.max_capacity for n in working.topology.nodes)] = summary
     before = run(working)
     reference = before
     resolved_by: dict[str, list[str]] = {}
 
-    # Phase 1 — repair: raise whichever node removes the most failure.
+    working, reference, _ = _repair(working, reference, run, resolved_by)
+    for _ in range(MAX_ROUNDS):
+        working, reference, settled = _settle(config, working, reference, run)
+        if not settled or not _serious(reference):
+            break
+        # The cuts may have opened room for a raise that did not help before.
+        working, reference, repaired = _repair(working, reference, run, resolved_by)
+        if not repaired:
+            break  # a re-plan from here would change nothing
+
+    return _finish(config, working, summary, before, reference, resolved_by, seeds)
+
+
+def _repair(
+    working: SimulationConfig,
+    reference: Summary,
+    run: Simulate,
+    resolved_by: dict[str, list[str]],
+) -> tuple[SimulationConfig, Summary, bool]:
+    """Phase 1 — raise whichever node removes the most failure, repeatedly.
+    Also says whether anything changed."""
+    repaired = False
     for _ in range(MAX_REPAIR_STEPS):
         if not _serious(reference):
             break
@@ -302,13 +462,25 @@ def plan_fix(
             current + 1, doubled, lambda c, s=search, t=trial: _as_good(s.at(c), t)
         )
         after = search.at(proposed)
-        cleared = sorted(_serious(reference) - _serious(after))
-        resolved_by.setdefault(node, []).extend(key.split("@")[0] for key in cleared)
+        was = _serious_findings(reference)
+        cleared = sorted(set(was) - _serious(after))
+        resolved_by.setdefault(node, []).extend(str(was[key].get("id")) for key in cleared)
         working = _with_capacity(working, node, proposed)
         reference = after
+        repaired = True
+    return working, reference, repaired
 
-    # Phases 2 and 3: clear undersized flags, then trim, until a fixed point.
+
+def _settle(
+    config: SimulationConfig,
+    working: SimulationConfig,
+    reference: Summary,
+    run: Simulate,
+) -> tuple[SimulationConfig, Summary, bool]:
+    """Phases 2 and 3 — clear undersized flags, then trim, to a fixed point.
+    Also says whether anything changed."""
     anchor = _score(reference)
+    changed_any = False
     for _ in range(MAX_PASSES):
         changed = False
         flagged = build_suggestions(
@@ -328,7 +500,7 @@ def plan_fix(
             reference = search.at(proposed)
             working = _with_capacity(working, node, proposed)
             anchor = max(anchor, _score(reference))
-            changed = True
+            changed = changed_any = True
         if changed:
             continue
         if anchor <= _score(reference):
@@ -337,20 +509,44 @@ def plan_fix(
         # config measures cuts against its own score, so do the same here;
         # otherwise that re-run would still have a cut to offer.
         anchor = _score(reference)
+    return working, reference, changed_any
 
-    suggestions = _suggestions(config, working, summary, resolved_by, seed)
+
+def _by_finding(summary: Summary) -> dict[str, dict[str, Any]]:
+    """crit/warn findings keyed ``id@node`` across every seed: one entry per
+    finding, critical if it is critical on any seed."""
+    out: dict[str, dict[str, Any]] = {}
+    for f in _serious_findings(summary).values():
+        key = f"{f.get('id')}@{f.get('node') or ''}"
+        if key not in out or f.get("severity") == "crit":
+            out[key] = f
+    return out
+
+
+def _finish(
+    config: SimulationConfig,
+    working: SimulationConfig,
+    summary: Summary,
+    before: Summary,
+    reference: Summary,
+    resolved_by: dict[str, list[str]],
+    seeds: list[int],
+) -> FixPlan:
+    """The suggestions and their outcome, from the plan's last accepted run."""
+    suggestions = _suggestions(config, working, summary, resolved_by, _seeds_label(seeds))
     if not suggestions and not _serious(before):
         return FixPlan(suggestions=[], outcome=None)
 
-    gone = _serious_findings(before)
-    remaining = _serious_findings(reference)
+    gone = _by_finding(before)
+    remaining = _by_finding(reference)
     rates = {n.name: n.cost_per_hour for n in config.topology.nodes}
     deltas = [s["est_monthly_delta"] for s in suggestions if s["est_monthly_delta"] is not None]
     priced = any(rates.values())
     explanation_before = before.get("score_explanation") or {}
     explanation_after = reference.get("score_explanation") or {}
     outcome = FixOutcome(
-        seed=seed,
+        seed=seeds[0],
+        seeds=list(seeds),
         score_before=before.get("resilience_score"),
         score_after=reference.get("resilience_score"),
         band_before=explanation_before.get("band"),
@@ -428,7 +624,7 @@ def _suggestions(
     working: SimulationConfig,
     summary: Summary,
     resolved_by: dict[str, list[str]],
-    seed: int,
+    verified_on: str,
 ) -> list[Suggestion]:
     sizing = summary.get("component_sizing") or {}
     out: list[Suggestion] = []
@@ -444,7 +640,9 @@ def _suggestions(
                 param="max_capacity",
                 current=before,
                 proposed=after,
-                reason=_reason(n.name, before, after, mean_util, resolved_by.get(n.name), seed),
+                reason=_reason(
+                    n.name, before, after, mean_util, resolved_by.get(n.name), verified_on
+                ),
                 est_monthly_delta=(
                     n.cost_per_hour * (after - before) * _HOURS_PER_MONTH
                     if n.cost_per_hour > 0
@@ -462,9 +660,9 @@ def _reason(
     after: int,
     mean_util: float | None,
     cleared: list[str] | None,
-    seed: int,
+    verified_on: str,
 ) -> str:
-    verified = f"(verified by simulation, seed {seed})"
+    verified = f"(verified by simulation, {verified_on})"
     if after > before and cleared:
         names = ", ".join(dict.fromkeys(c.replace("_", " ") for c in cleared))
         return f"{node}: raise max_capacity {before} → {after} — clears {names} {verified}"

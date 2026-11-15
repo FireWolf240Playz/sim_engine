@@ -18,6 +18,7 @@ Format: one row per active claim. `Since` is a date, not a guess.
 | `tests/test_exports.py`, `tests/test_api_export.py`, `tests/test_export_cli.py`, `.agents/tasks/2.1-export-engine.md`, `2.1b-export-api-cli.md` | claude | 2026-11-14 | 2.1 / 2.1b contracts + cards — done, both carry `## Result`; locked contracts from here on |
 | `web/tests/exports.test.ts`, `web/tests/exportClient.test.ts`, `.agents/tasks/2.1c-export-menu.md`, `web/src/core/types.ts` | claude | 2026-11-14 | 2.1c contracts + card — done, the card carries `## Result`; locked contracts from here on |
 | `tests/test_event_sink.py`, `tests/test_feed.py`, `tests/test_feed_outage.py`, `tests/test_api_runs.py`, `tests/test_custom_chaos.py`, `tests/test_traffic_shapes.py`, `web/tests/runStream.test.ts`, `web/tests/runClient.test.ts`, `web/tests/playback.test.ts`, `web/tests/liveView.test.ts`, `web/tests/replay.test.ts`, `web/tests/clickToFail.test.ts`, `web/tests/trafficShape.test.ts`, `web/tests/fixtures/runStream.ts`, `.agents/tasks/3.*.md` | claude | 2026-11-15 | Wave 3 contracts + cards — all eight built, each card carries `## Result`; locked contracts from here on |
+| `tests/test_fix_converges.py`, `web/tests/fixSeeds.test.ts`, `.agents/tasks/1.3i-fix-converges.md` | claude | 2026-11-15 | 1.3i contracts + card — Fix it converges in one apply, in single and 5-seed mode |
 
 > **Claude, 2026-10-08:** the `api/` row is superseded. A top-level key
 > breaks `tests/test_profile.py`. `suggestions` goes inside `summary()` (via
